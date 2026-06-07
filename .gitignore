@@ -39,3 +39,17 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local databases and data files
+*.db
+*.db-shm
+*.db-wal
+*.xlsx
+
+# logs and screen logs
+/logs/
+screen_*.log
+
+# local backups
+/backups/
+
