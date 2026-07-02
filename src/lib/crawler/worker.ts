@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { detectTechnologies } from "./detector";
 import { calculateLeadScore } from "./scorer";
 import * as crypto from "crypto";
+import * as zlib from "zlib";
 
 // Set this to bypass SSL certificate validation errors so we can crawl sites with expired/invalid SSL
 // and flag them as having SSL issues rather than failing the crawl entirely.
@@ -24,6 +25,8 @@ export interface CrawlResult {
   hasGdpr: boolean;
   emailAddresses: string[];
   htmlHash: string | null;
+  cleanedTextContent: string | null;
+  rawHtml: string | null;
 }
 
 export async function fetchAndAnalyzeDomain(domain: string): Promise<CrawlResult> {
@@ -80,6 +83,8 @@ export async function fetchAndAnalyzeDomain(domain: string): Promise<CrawlResult
       hasGdpr: false,
       emailAddresses: [],
       htmlHash: null,
+      cleanedTextContent: null,
+      rawHtml: null,
     };
   }
 
@@ -104,9 +109,15 @@ export async function fetchAndAnalyzeDomain(domain: string): Promise<CrawlResult
   const title = $("title").text().trim() || null;
   const metaDescription = $("meta[name='description']").attr("content")?.trim() || null;
 
+  // Extract cleaned body text content (avoid scripts, styles, header, footer, cookie banners)
+  const bodyClone = $("body").clone();
+  bodyClone.find("script, style, link, iframe, noscript, svg, header, footer, nav, [class*='cookie'], [id*='cookie'], [class*='popup']").remove();
+  const cleanedTextContent = bodyClone.text().replace(/\s+/g, " ").trim() || null;
+
   // Run detectors
   const detection = detectTechnologies(html, {});
-  const htmlHash = md5(html);
+  // Use clean text hash to avoid dynamic elements triggering false positives
+  const htmlHash = cleanedTextContent ? md5(cleanedTextContent) : md5(html);
 
   return {
     status,
@@ -119,6 +130,8 @@ export async function fetchAndAnalyzeDomain(domain: string): Promise<CrawlResult
     hasGdpr: detection.hasGdpr,
     emailAddresses: detection.emails,
     htmlHash,
+    cleanedTextContent,
+    rawHtml: html,
   };
 }
 
@@ -138,6 +151,33 @@ export async function crawlCompany(companyId: number, domain: string): Promise<b
 
     const prev = previousSnapshots[0] || null;
 
+    // Detect if we should write a full snapshot or heartbeat
+    // We write a full snapshot if:
+    // 1. There is no previous snapshot
+    // 2. The previous snapshot was a heartbeat/empty (was not full)
+    // 3. The content hash has changed (prev.htmlHash !== result.htmlHash)
+    // 4. The HTTP status changed between online/offline
+    let isFull = false;
+    if (!prev || prev.isFull === 0) {
+      isFull = true;
+    } else {
+      const statusChanged = (prev.httpStatus === 200) !== (result.httpStatus === 200);
+      const hashChanged = prev.htmlHash !== result.htmlHash;
+      if (statusChanged || hashChanged) {
+        isFull = true;
+      }
+    }
+
+    // Compress raw HTML if it is a full snapshot
+    let compressedHtml: string | null = null;
+    if (isFull && result.rawHtml) {
+      try {
+        compressedHtml = zlib.gzipSync(result.rawHtml).toString("base64");
+      } catch (err) {
+        console.error(`Failed to compress HTML for ${domain}:`, err);
+      }
+    }
+
     // Save snapshot
     const snapshotTime = Date.now();
     await db.insert(websiteSnapshots).values({
@@ -152,6 +192,9 @@ export async function crawlCompany(companyId: number, domain: string): Promise<b
       hasGdpr: result.hasGdpr ? 1 : 0,
       emailAddresses: result.emailAddresses.join(", "),
       htmlHash: result.htmlHash,
+      cleanedTextContent: isFull ? result.cleanedTextContent : null,
+      rawHtml: compressedHtml,
+      isFull: isFull ? 1 : 0,
     });
 
     // Detect Change Events
@@ -220,19 +263,11 @@ export async function crawlCompany(companyId: number, domain: string): Promise<b
       })
       .where(eq(companies.id, companyId));
 
-    console.log(`[CRAWL] Finished ID ${companyId} (${domain}). Score: ${leadScore}. Status: ${result.status}`);
+    console.log(`[CRAWL] Finished ID ${companyId} (${domain}). Score: ${leadScore}. Status: ${result.status} (isFull: ${isFull ? 1 : 0})`);
     return true;
   } catch (e: any) {
     console.error(`[CRAWL] Failed for ID ${companyId} (${domain}):`, e.message || e);
-    // Mark as dead on error
-    await db
-      .update(companies)
-      .set({
-        status: "dead",
-        leadScore: 35, // mark as dead/no website
-        lastCrawledAt: Date.now(),
-      })
-      .where(eq(companies.id, companyId));
+    // Do NOT set status to "dead" on system/database write failures!
     return false;
   }
 }

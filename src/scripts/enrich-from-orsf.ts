@@ -246,7 +246,7 @@ async function main() {
   console.log(`Config: Limit = ${limit}, Delay = ${delayMs}ms`);
 
   await withDbRetry(
-    () => db.run(sql`PRAGMA busy_timeout = 5000`),
+    () => db.run(sql`PRAGMA busy_timeout = 60000`),
     "set busy timeout"
   );
 

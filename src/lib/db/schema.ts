@@ -50,6 +50,9 @@ export const websiteSnapshots = sqliteTable("website_snapshots", {
   emailAddresses: text("email_addresses"), // Found during crawl (comma-separated)
   htmlHash: text("html_hash"), // To compare visual/structural content changes
   screenshotUrl: text("screenshot_url"),
+  cleanedTextContent: text("cleaned_text_content"),
+  rawHtml: text("raw_html"),
+  isFull: integer("is_full").default(0).notNull(),
 });
 
 // Change Events Table (Triggered when changes are detected)

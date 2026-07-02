@@ -15,6 +15,7 @@ import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
 import * as schema from "../lib/db/schema";
 import { eq, and, isNull, sql } from "drizzle-orm";
+import dns from "dns/promises";
 
 const client = createClient({ url: "file:sqlite.db" });
 const db = drizzle(client, { schema });
@@ -25,9 +26,39 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function runPool<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const active: Promise<any>[] = [];
+  const results: Promise<T>[] = [];
+
+  for (const task of tasks) {
+    const p = task();
+    results.push(p);
+
+    const activePromise = p.then(() => {
+      active.splice(active.indexOf(activePromise), 1);
+    });
+    active.push(activePromise);
+
+    if (active.length >= limit) {
+      await Promise.race(active);
+    }
+  }
+
+  return Promise.all(results);
+}
+
 function isSqliteBusy(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("SQLITE_BUSY") || message.includes("database is locked");
+}
+
+async function dnsCheck(host: string): Promise<boolean> {
+  try {
+    await dns.lookup(host);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function withDbRetry<T>(
@@ -164,6 +195,24 @@ async function searchDuckDuckGo(query: string): Promise<string | null> {
   }
 }
 
+let ddgLock = Promise.resolve();
+
+async function searchDuckDuckGoLocked(query: string, delayMs: number): Promise<string | null> {
+  const currentLock = ddgLock;
+  let release: () => void = () => {};
+  ddgLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await currentLock;
+  try {
+    const result = await searchDuckDuckGo(query);
+    await sleep(delayMs);
+    return result;
+  } finally {
+    release();
+  }
+}
+
 // ── Domain Guessing ──────────────────────────────────────────────────────────
 
 async function tryDomainGuess(companyName: string): Promise<string | null> {
@@ -177,6 +226,10 @@ async function tryDomainGuess(companyName: string): Promise<string | null> {
   ];
 
   for (const domain of candidates) {
+    // Fast DNS lookup check to skip connection timeouts for inactive domains
+    const hasDns = await dnsCheck(domain);
+    if (!hasDns) continue;
+
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
@@ -196,7 +249,7 @@ async function tryDomainGuess(companyName: string): Promise<string | null> {
         return `https://${domain}`;
       }
     } catch {
-      // Domain doesn't exist or timeout
+      // Domain doesn't exist or validation failed
     }
   }
 
@@ -207,6 +260,13 @@ async function tryDomainGuess(companyName: string): Promise<string | null> {
 
 async function validateUrl(url: string): Promise<boolean> {
   try {
+    const domain = extractDomain(url);
+    if (!domain) return false;
+
+    // Fast DNS check before full HTTP validation
+    const hasDns = await dnsCheck(domain);
+    if (!hasDns) return false;
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
 
@@ -232,6 +292,7 @@ async function main() {
   const args = process.argv.slice(2);
   let limit = 500;
   let delayMs = 600; // ms between searches
+  let concurrency = 8; // default concurrency
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--limit" && args[i + 1]) {
@@ -240,14 +301,17 @@ async function main() {
     } else if (args[i] === "--delay" && args[i + 1]) {
       delayMs = parseInt(args[i + 1], 10);
       i++;
+    } else if (args[i] === "--concurrency" && args[i + 1]) {
+      concurrency = parseInt(args[i + 1], 10);
+      i++;
     }
   }
 
   console.log(`\n=== 🔍 Eagle Eye Website Discovery ===`);
-  console.log(`Config: Limit = ${limit}, Delay = ${delayMs}ms\n`);
+  console.log(`Config: Limit = ${limit}, Delay = ${delayMs}ms, Concurrency = ${concurrency}\n`);
 
   await withDbRetry(
-    () => client.execute("PRAGMA busy_timeout = 5000"),
+    () => client.execute("PRAGMA busy_timeout = 60000"),
     "set busy timeout"
   );
 
@@ -265,7 +329,9 @@ async function main() {
           and(
             isNull(schema.companies.domain),
             eq(schema.companies.googleSearched, 0),
-            eq(schema.companies.legalFormCode, "sro")
+            eq(schema.companies.legalFormCode, "sro"),
+            eq(schema.companies.orsfEnriched, 1),
+            sql`${schema.companies.revenue} > 0`
           )
         )
         .limit(limit),
@@ -302,111 +368,113 @@ async function main() {
     );
   }, 10000);
 
-  for (const company of targets) {
-    searched++;
+  const tasks = targets.map((company) => {
+    return async () => {
+      // Strategy 1: DuckDuckGo search (locked/sequenced)
+      const searchQuery = `${company.name} ${company.city || ""} slovensko`;
+      let discoveredUrl = await searchDuckDuckGoLocked(searchQuery, delayMs);
+      let method = "ddg";
 
-    // Strategy 1: DuckDuckGo search
-    const searchQuery = `${company.name} ${company.city || ""} slovensko`;
-    let discoveredUrl = await searchDuckDuckGo(searchQuery);
-    let method = "ddg";
+      // Strategy 2: Domain guessing
+      if (!discoveredUrl) {
+        discoveredUrl = await tryDomainGuess(company.name);
+        method = "guess";
+      }
 
-    // Strategy 2: Domain guessing
-    if (!discoveredUrl) {
-      discoveredUrl = await tryDomainGuess(company.name);
-      method = "guess";
-    }
+      if (discoveredUrl) {
+        // Validate the URL
+        const valid = await validateUrl(discoveredUrl);
 
-    if (discoveredUrl) {
-      // Validate the URL
-      const valid = await validateUrl(discoveredUrl);
+        if (valid) {
+          const domain = extractDomain(discoveredUrl);
+          if (domain) {
+            // Check if domain already exists in DB (avoid unique constraint violations)
+            const existing = await withDbRetry(
+              () =>
+                db
+                  .select({ id: schema.companies.id })
+                  .from(schema.companies)
+                  .where(eq(schema.companies.domain, domain))
+                  .limit(1),
+              `check domain ${domain}`
+            );
 
-      if (valid) {
-        const domain = extractDomain(discoveredUrl);
-        if (domain) {
-          // Check if domain already exists in DB (avoid unique constraint violations)
-          const existing = await withDbRetry(
+            if (existing.length === 0) {
+              await withDbRetry(
+                () =>
+                  db
+                    .update(schema.companies)
+                    .set({
+                      website: discoveredUrl,
+                      domain: domain,
+                      googleSearched: 1,
+                    })
+                    .where(eq(schema.companies.id, company.id)),
+                `save website for company ${company.id}`
+              );
+
+              found++;
+              if (method === "ddg") ddgHits++;
+              else guessHits++;
+
+              console.log(
+                `[FOUND] #${searched + 1} ID ${company.id}: "${company.name}" → ${domain} (via ${method})`
+              );
+            } else {
+              // Domain taken by another company, mark as searched
+              await withDbRetry(
+                () =>
+                  db
+                    .update(schema.companies)
+                    .set({ googleSearched: 1 })
+                    .where(eq(schema.companies.id, company.id)),
+                `mark duplicate domain for company ${company.id}`
+              );
+              failed++;
+              console.log(
+                `[SKIP] #${searched + 1} ID ${company.id}: "${company.name}" → ${domain} already in DB`
+              );
+            }
+          }
+        } else {
+          // URL didn't validate
+          await withDbRetry(
             () =>
               db
-                .select({ id: schema.companies.id })
-                .from(schema.companies)
-                .where(eq(schema.companies.domain, domain))
-                .limit(1),
-            `check domain ${domain}`
+                .update(schema.companies)
+                .set({ googleSearched: 1 })
+                .where(eq(schema.companies.id, company.id)),
+            `mark invalid website for company ${company.id}`
           );
-
-          if (existing.length === 0) {
-            await withDbRetry(
-              () =>
-                db
-                  .update(schema.companies)
-                  .set({
-                    website: discoveredUrl,
-                    domain: domain,
-                    googleSearched: 1,
-                  })
-                  .where(eq(schema.companies.id, company.id)),
-              `save website for company ${company.id}`
-            );
-
-            found++;
-            if (method === "ddg") ddgHits++;
-            else guessHits++;
-
-            console.log(
-              `[FOUND] #${searched} ID ${company.id}: "${company.name}" → ${domain} (via ${method})`
-            );
-          } else {
-            // Domain taken by another company, mark as searched
-            await withDbRetry(
-              () =>
-                db
-                  .update(schema.companies)
-                  .set({ googleSearched: 1 })
-                  .where(eq(schema.companies.id, company.id)),
-              `mark duplicate domain for company ${company.id}`
-            );
-            failed++;
-            console.log(
-              `[SKIP] #${searched} ID ${company.id}: "${company.name}" → ${domain} already in DB`
-            );
-          }
+          failed++;
+          console.log(
+            `[INVALID] #${searched + 1} ID ${company.id}: "${company.name}" → ${discoveredUrl} (failed validation)`
+          );
         }
       } else {
-        // URL didn't validate
+        // No result found
         await withDbRetry(
           () =>
             db
               .update(schema.companies)
               .set({ googleSearched: 1 })
               .where(eq(schema.companies.id, company.id)),
-          `mark invalid website for company ${company.id}`
+          `mark no result for company ${company.id}`
         );
         failed++;
-        console.log(
-          `[INVALID] #${searched} ID ${company.id}: "${company.name}" → ${discoveredUrl} (failed validation)`
-        );
-      }
-    } else {
-      // No result found
-      await withDbRetry(
-        () =>
-          db
-            .update(schema.companies)
-            .set({ googleSearched: 1 })
-            .where(eq(schema.companies.id, company.id)),
-        `mark no result for company ${company.id}`
-      );
-      failed++;
 
-      if (searched % 50 === 0) {
-        console.log(
-          `[MISS] #${searched} ID ${company.id}: "${company.name}" — no website found`
-        );
+        if ((searched + 1) % 50 === 0) {
+          console.log(
+            `[MISS] #${searched + 1} ID ${company.id}: "${company.name}" — no website found`
+          );
+        }
       }
-    }
 
-    await sleep(delayMs);
-  }
+      searched++;
+    };
+  });
+
+  await runPool(tasks, concurrency);
 
   clearInterval(ticker);
 
