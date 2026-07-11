@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { companies, websiteSnapshots } from "@/lib/db/schema";
-import { eq, like, or, and, desc, asc, sql, not, isNull } from "drizzle-orm";
+import { companies, websiteSnapshots, communications } from "@/lib/db/schema";
+import { eq, like, or, and, desc, asc, sql, not, isNull, getTableColumns } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -66,6 +66,11 @@ export async function GET(request: NextRequest) {
       filters.push(sql`${companies.leadScore} < 35`);
     } else if (tag === "no_website") {
       filters.push(isNull(companies.domain));
+    } else if (tag === "clients") {
+      // "My clients" = companies we have exchanged at least one email with
+      filters.push(
+        sql`EXISTS (SELECT 1 FROM communications m WHERE m.company_id = ${companies.id})`
+      );
     }
   }
 
@@ -88,9 +93,12 @@ export async function GET(request: NextRequest) {
   try {
     const whereClause = filters.length > 0 ? and(...filters) : undefined;
 
-    // Fetch data
+    // Fetch data (+ how many emails we've exchanged with each company)
     const data = await db
-      .select()
+      .select({
+        ...getTableColumns(companies),
+        commCount: sql<number>`(SELECT COUNT(*) FROM communications m WHERE m.company_id = ${companies.id})`,
+      })
       .from(companies)
       .where(whereClause)
       .orderBy(orderByClause)

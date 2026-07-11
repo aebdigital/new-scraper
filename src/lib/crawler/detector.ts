@@ -1,10 +1,12 @@
 import * as cheerio from "cheerio";
+import { extractContactsFromHtml } from "./contact-extractor";
 
 export interface TechDetectionResult {
   technologies: string[];
   copyrightYear: number | null;
   hasGdpr: boolean;
   emails: string[];
+  phones: string[];
 }
 
 export function detectTechnologies(
@@ -132,37 +134,15 @@ export function detectTechnologies(
     }
   });
 
-  // 5. Email Addresses Extraction
-  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-  const emailsSet = new Set<string>();
-  
-  // Extract from body text
-  const bodyText = $("body").text();
-  const foundEmails = bodyText.match(emailRegex);
-  if (foundEmails) {
-    foundEmails.forEach((email) => {
-      // Basic filtering to avoid junk/image extensions
-      const lower = email.toLowerCase().trim();
-      if (!lower.endsWith(".png") && !lower.endsWith(".jpg") && !lower.endsWith(".gif") && !lower.endsWith(".webp")) {
-        emailsSet.add(lower);
-      }
-    });
-  }
-
-  // Extract from mailto: links
-  $("a[href^='mailto:']").each((_, elem) => {
-    const href = $(elem).attr("href") || "";
-    const email = href.replace("mailto:", "").split("?")[0].trim().toLowerCase();
-    if (email.includes("@")) {
-      emailsSet.add(email);
-    }
-  });
+  // 5. Contact extraction
+  const contacts = extractContactsFromHtml(html);
 
   return {
     technologies: Array.from(new Set(techs)),
     copyrightYear,
     hasGdpr,
-    emails: Array.from(emailsSet).slice(0, 5), // limit to top 5
+    emails: contacts.emails,
+    phones: contacts.phones,
   };
 }
 
@@ -402,7 +382,7 @@ export function detectFooterAgency(
 
   const footerSelectors = ["footer", ".footer", "#footer", "[class*='footer']", "[id*='footer']"];
   let footerHtml = "";
-  let $footer = $("footer");
+  let $footer: cheerio.Cheerio<any> = $("footer");
 
   for (const sel of footerSelectors) {
     const el = $(sel);
@@ -436,12 +416,12 @@ export function detectFooterAgency(
     const allLinks = $footer.find("a");
     let bestLink: { name: string; url: string } | null = null;
 
-    allLinks.each((_, el) => {
+    for (const el of allLinks.toArray()) {
       const linkText = $(el).text().trim();
       const href = $(el).attr("href") || "";
 
-      if (!linkText || linkText.length < 2 || linkText.length > 80) return;
-      if (!href || href === "#" || href.startsWith("mailto:") || href.startsWith("tel:")) return;
+      if (!linkText || linkText.length < 2 || linkText.length > 80) continue;
+      if (!href || href === "#" || href.startsWith("mailto:") || href.startsWith("tel:")) continue;
 
       // Check if this link's text appears near the pattern match
       // If afterMatch starts with the linkText (ignoring leading whitespace or non-alphanumeric chars)
@@ -454,7 +434,7 @@ export function detectFooterAgency(
           bestLink = { name: linkText, url: href };
         }
       }
-    });
+    }
 
     if (bestLink) {
       const domain = extractDomainFromHref(bestLink.url);
@@ -570,4 +550,3 @@ export function extractDomainFromHref(href: string): string | null {
     return null;
   }
 }
-

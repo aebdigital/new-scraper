@@ -53,3 +53,9 @@ screen_*.log
 # local backups
 /backups/
 
+# email archives
+*.mbox
+context.txt
+
+
+

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { companies, websiteSnapshots, changeEvents } from "@/lib/db/schema";
+import { companies, websiteSnapshots, changeEvents, communications } from "@/lib/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { crawlCompany } from "@/lib/crawler/worker";
 
@@ -106,10 +106,18 @@ export async function GET(
       .orderBy(desc(changeEvents.timestamp))
       .limit(10);
 
+    const comms = await db
+      .select()
+      .from(communications)
+      .where(eq(communications.companyId, companyId))
+      .orderBy(desc(communications.occurredAt))
+      .limit(200);
+
     return NextResponse.json({
       company,
       snapshot: latestSnapshots[0] || null,
       events,
+      communications: comms,
     });
   } catch (error: any) {
     console.error("API Error in GET /api/companies/[id]/crawl:", error);

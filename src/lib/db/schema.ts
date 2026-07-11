@@ -29,6 +29,8 @@ export const companies = sqliteTable("companies", {
   naceSubdivision: text("nace_subdivision"), // NACE full subdivision (e.g. "43210")
   legalFormCode: text("legal_form_code"), // 'sro' or 'sole_trader'
   googleSearched: integer("google_searched").default(0).notNull(), // Track if website search has run
+  contactSearched: integer("contact_searched").default(0).notNull(), // Track if contact extraction has run
+  contactSearchedAt: integer("contact_searched_at"), // Timestamp (ms) when contact extraction last ran
   websiteAgencyId: integer("website_agency_id"), // FK to rivals table (who built their website)
   createdAt: integer("created_at").$defaultFn(() => Date.now()),
 });
@@ -64,6 +66,27 @@ export const changeEvents = sqliteTable("change_events", {
   timestamp: integer("timestamp").notNull(),
   type: text("type").notNull(), // 'cms_changed', 'redesign', 'status_changed', 'new_email'
   description: text("description").notNull(),
+});
+
+// Communications Table — Past email/call history with companies (imported from Gmail Takeout mbox, carrier call logs, etc.)
+export const communications = sqliteTable("communications", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  companyId: integer("company_id").references(() => companies.id, {
+    onDelete: "set null",
+  }), // Nullable: a message we couldn't match to a known company is still kept
+  channel: text("channel").notNull().default("email"), // 'email' | 'call'
+  direction: text("direction").notNull(), // 'in' | 'out'
+  occurredAt: integer("occurred_at").notNull(), // Timestamp (ms) the message was sent/received
+  counterpartyEmail: text("counterparty_email"), // The other party's address
+  counterpartyDomain: text("counterparty_domain"), // Domain of the other party (matching key)
+  counterpartyName: text("counterparty_name"), // Display name if present
+  ownerEmail: text("owner_email"), // Which of our @aebdig.com addresses was involved
+  subject: text("subject"),
+  bodyText: text("body_text"), // Decoded plain-text body of the email (attachments stripped)
+  durationSec: integer("duration_sec"), // For calls
+  messageId: text("message_id").unique(), // RFC Message-ID (or synthesized) — dedupe key for idempotent re-import
+  source: text("source").notNull().default("gmail_mbox"), // Provenance: 'gmail_mbox' | 'carrier_calls' | ...
+  createdAt: integer("created_at").$defaultFn(() => Date.now()),
 });
 
 // Rivals Table — Web design agencies that build client websites
@@ -103,9 +126,17 @@ export const companiesRelations = relations(companies, ({ many, one }) => ({
   snapshots: many(websiteSnapshots),
   events: many(changeEvents),
   rivalLinks: many(rivalClients),
+  communications: many(communications),
   builtBy: one(rivals, {
     fields: [companies.websiteAgencyId],
     references: [rivals.id],
+  }),
+}));
+
+export const communicationsRelations = relations(communications, ({ one }) => ({
+  company: one(companies, {
+    fields: [communications.companyId],
+    references: [companies.id],
   }),
 }));
 

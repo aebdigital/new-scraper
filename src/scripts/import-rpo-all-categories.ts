@@ -118,7 +118,9 @@ function normalizeNace(rawNace: unknown): string | null {
   return digits.length === 4 ? `${digits}0` : digits;
 }
 
-function getCurrentValue<T extends { validTo?: string }>(values: T[] | undefined): T | undefined {
+function getCurrentValue(
+  values: { validTo?: string; [key: string]: any }[] | undefined
+): { validTo?: string; [key: string]: any } | undefined {
   if (!values || values.length === 0) return undefined;
   return values.find((value) => !value.validTo) || values[0];
 }

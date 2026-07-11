@@ -3,6 +3,7 @@ import { companies, websiteSnapshots, changeEvents } from "../db/schema";
 import { eq, desc } from "drizzle-orm";
 import { detectTechnologies } from "./detector";
 import { calculateLeadScore } from "./scorer";
+import { mergeEmailList, mergePhoneList } from "./contact-extractor";
 import * as crypto from "crypto";
 import * as zlib from "zlib";
 
@@ -24,6 +25,7 @@ export interface CrawlResult {
   copyrightYear: number | null;
   hasGdpr: boolean;
   emailAddresses: string[];
+  phoneNumbers: string[];
   htmlHash: string | null;
   cleanedTextContent: string | null;
   rawHtml: string | null;
@@ -82,6 +84,7 @@ export async function fetchAndAnalyzeDomain(domain: string): Promise<CrawlResult
       copyrightYear: null,
       hasGdpr: false,
       emailAddresses: [],
+      phoneNumbers: [],
       htmlHash: null,
       cleanedTextContent: null,
       rawHtml: null,
@@ -129,6 +132,7 @@ export async function fetchAndAnalyzeDomain(domain: string): Promise<CrawlResult
     copyrightYear: detection.copyrightYear,
     hasGdpr: detection.hasGdpr,
     emailAddresses: detection.emails,
+    phoneNumbers: detection.phones,
     htmlHash,
     cleanedTextContent,
     rawHtml: html,
@@ -139,7 +143,14 @@ export async function crawlCompany(companyId: number, domain: string): Promise<b
   console.log(`[CRAWL] Starting crawl for company ID ${companyId} (${domain})...`);
 
   try {
-    const result = await fetchAndAnalyzeDomain(domain);
+    let result = await fetchAndAnalyzeDomain(domain);
+
+    // One connection failure can be transient (DNS hiccup, local network
+    // saturation under high concurrency) — retry once before believing it
+    if (result.status === "dead") {
+      await new Promise((r) => setTimeout(r, 2000));
+      result = await fetchAndAnalyzeDomain(domain);
+    }
 
     // Fetch previous snapshot to detect changes
     const previousSnapshots = await db
@@ -150,6 +161,13 @@ export async function crawlCompany(companyId: number, domain: string): Promise<b
       .limit(1);
 
     const prev = previousSnapshots[0] || null;
+
+    // If the site was live on its last snapshot but this attempt could not
+    // connect at all, treat it as a transient outage: keep the company's
+    // status/score and let a future crawl decide. Prevents one bad run from
+    // mass-flipping live companies to "dead".
+    const transientFailure =
+      result.status === "dead" && result.httpStatus === null && prev?.httpStatus === 200;
 
     // Detect if we should write a full snapshot or heartbeat
     // We write a full snapshot if:
@@ -233,7 +251,7 @@ export async function crawlCompany(companyId: number, domain: string): Promise<b
       // 3. Status change
       const prevStatus = prev.httpStatus === 200 ? "live" : "dead";
       const currStatus = result.status;
-      if (prevStatus !== currStatus) {
+      if (prevStatus !== currStatus && !transientFailure) {
         await db.insert(changeEvents).values({
           companyId,
           timestamp: snapshotTime,
@@ -253,17 +271,42 @@ export async function crawlCompany(companyId: number, domain: string): Promise<b
     });
 
     // Update Company Record
-    // Check if new emails were found that weren't in the original database, append them
+    const companyContact = await db
+      .select({
+        phone: companies.phone,
+        emailsFound: companies.emailsFound,
+      })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .limit(1);
+
+    const currentContact = companyContact[0] || null;
+    const mergedEmails =
+      result.emailAddresses.length > 0
+        ? mergeEmailList(currentContact?.emailsFound, result.emailAddresses, 5)
+        : currentContact?.emailsFound;
+    const mergedPhones =
+      result.phoneNumbers.length > 0
+        ? mergePhoneList(currentContact?.phone, result.phoneNumbers, 3)
+        : currentContact?.phone;
+
     await db
       .update(companies)
       .set({
-        status: result.status,
-        leadScore,
         lastCrawledAt: snapshotTime,
+        phone: mergedPhones || undefined,
+        emailsFound: mergedEmails || undefined,
+        contactSearched: 1,
+        contactSearchedAt: snapshotTime,
+        ...(transientFailure ? {} : { status: result.status, leadScore }),
       })
       .where(eq(companies.id, companyId));
 
-    console.log(`[CRAWL] Finished ID ${companyId} (${domain}). Score: ${leadScore}. Status: ${result.status} (isFull: ${isFull ? 1 : 0})`);
+    console.log(
+      `[CRAWL] Finished ID ${companyId} (${domain}). Score: ${leadScore}. Status: ${
+        transientFailure ? "transient failure (status kept)" : result.status
+      } (isFull: ${isFull ? 1 : 0})`
+    );
     return true;
   } catch (e: any) {
     console.error(`[CRAWL] Failed for ID ${companyId} (${domain}):`, e.message || e);

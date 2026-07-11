@@ -15,6 +15,8 @@ import {
   ExternalLink,
   Clock,
   ArrowUpDown,
+  ArrowUpRight,
+  ArrowDownLeft,
   SlidersHorizontal,
   ChevronLeft,
   ChevronRight,
@@ -68,6 +70,7 @@ interface Company {
   naceDivision: string | null;
   naceSubdivision: string | null;
   legalFormCode: string | null;
+  commCount?: number;
 }
 
 interface Stats {
@@ -395,6 +398,8 @@ export default function Dashboard() {
   const [detailCompany, setDetailCompany] = useState<Company | null>(null);
   const [detailSnapshot, setDetailSnapshot] = useState<any | null>(null);
   const [detailEvents, setDetailEvents] = useState<any[]>([]);
+  const [detailComms, setDetailComms] = useState<any[]>([]);
+  const [expandedComm, setExpandedComm] = useState<number | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
   // Crawling action state
@@ -467,18 +472,22 @@ export default function Dashboard() {
       setDetailCompany(null);
       setDetailSnapshot(null);
       setDetailEvents([]);
+      setDetailComms([]);
+      setExpandedComm(null);
       return;
     }
 
     const fetchDetails = async () => {
       try {
         setDetailLoading(true);
+        setExpandedComm(null);
         const res = await fetch(`/api/companies/${selectedCompanyId}/crawl`);
         const data = await res.json();
         if (!data.error) {
           setDetailCompany(data.company);
           setDetailSnapshot(data.snapshot);
           setDetailEvents(data.events || []);
+          setDetailComms(data.communications || []);
         }
       } catch (e) {
         console.error(e);
@@ -829,6 +838,7 @@ export default function Dashboard() {
                 className="bg-slate-950/60 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-indigo-500"
               >
                 <option value="">All Lead Scopes</option>
+                <option value="clients">✉️ My Clients (emailed)</option>
                 <option value="hot">Hot Leads (≥60)</option>
                 <option value="warm">Warm Opportunities (35-59)</option>
                 <option value="low">Low Priority (&lt;35)</option>
@@ -1094,6 +1104,15 @@ export default function Dashboard() {
                       <td className="py-1.5 px-3">
                         <div className="font-semibold text-slate-100 flex items-center gap-2 flex-wrap">
                           <span>{c.name}</span>
+                          {(c.commCount ?? 0) > 0 && (
+                            <span
+                              title={`${c.commCount} emails on record`}
+                              className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 select-none flex-shrink-0 flex items-center gap-0.5"
+                            >
+                              <Mail className="h-2.5 w-2.5" />
+                              {c.commCount}
+                            </span>
+                          )}
                           {c.legalFormCode && (
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 uppercase select-none flex-shrink-0">
                               {c.legalFormCode === "sro" ? "s.r.o." : "Živnosť"}
@@ -1437,6 +1456,75 @@ export default function Dashboard() {
                     <div className="text-xs text-slate-600 italic">No events or status changes recorded.</div>
                   )}
                 </div>
+              </div>
+
+              {/* Communications / Email history */}
+              <div className="flex flex-col gap-2 mt-2 border-t border-white/5 pt-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Mail className="h-3.5 w-3.5" />
+                  <span>Emails</span>
+                  {detailComms.length > 0 && (
+                    <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded">
+                      {detailComms.length}
+                    </span>
+                  )}
+                </h4>
+                {detailComms.length === 0 ? (
+                  <div className="text-xs text-slate-600 italic">No email correspondence on record.</div>
+                ) : (
+                  <div className="flex flex-col gap-1.5 max-h-[280px] overflow-y-auto pr-1">
+                    {detailComms.map((m: any) => {
+                      const out = m.direction === "out";
+                      const open = expandedComm === m.id;
+                      return (
+                        <div
+                          key={m.id}
+                          className="text-xs rounded-lg bg-white/2 border border-white/5 overflow-hidden"
+                        >
+                          <button
+                            onClick={() => setExpandedComm(open ? null : m.id)}
+                            className="w-full text-left px-2.5 py-1.5 flex items-start gap-2 hover:bg-white/5 transition cursor-pointer"
+                          >
+                            {out ? (
+                              <ArrowUpRight className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-400" />
+                            ) : (
+                              <ArrowDownLeft className="h-3.5 w-3.5 mt-0.5 shrink-0 text-cyan-400" />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-slate-300 truncate">
+                                  {out ? "To" : "From"}: {m.counterpartyName || m.counterpartyEmail || "—"}
+                                </span>
+                                <span className="text-[10px] text-slate-500 shrink-0">{formatDate(m.occurredAt)}</span>
+                              </div>
+                              <div className="text-slate-200 font-semibold truncate">
+                                {m.subject || <span className="text-slate-500 italic font-normal">(no subject)</span>}
+                              </div>
+                            </div>
+                          </button>
+                          {open && (
+                            <div className="px-2.5 pb-2.5 pt-1 border-t border-white/5">
+                              <div className="text-[10px] text-slate-500 mb-1.5 break-all">
+                                {out ? "→ " : "← "}{m.counterpartyEmail}
+                                {m.counterpartyEmail && (
+                                  <a
+                                    href={`mailto:${m.counterpartyEmail}`}
+                                    className="ml-2 text-indigo-400 hover:text-indigo-300 underline"
+                                  >
+                                    reply
+                                  </a>
+                                )}
+                              </div>
+                              <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-300 max-h-[220px] overflow-y-auto font-sans">
+                                {m.bodyText || <span className="text-slate-600 italic">No text content.</span>}
+                              </pre>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Quick links */}

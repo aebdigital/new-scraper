@@ -7,5 +7,9 @@ const client = createClient({
   url: "file:sqlite.db",
 });
 
+// Several background scripts (discovery, bulk matcher, crawler) write
+// concurrently — wait for locks instead of failing with SQLITE_BUSY.
+client.execute("PRAGMA busy_timeout = 60000").catch(() => {});
+
 export const db = drizzle(client, { schema });
 export * as schema from "./schema";
