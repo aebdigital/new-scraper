@@ -654,56 +654,74 @@ export default function Dashboard() {
     }
   };
 
-  // Save CRM logs (Call / Email notes & timestamps)
-  const handleSaveLogs = async () => {
+  // Add temporary manual communication log row in UI
+  const handleAddManualComm = (channel: "call" | "email") => {
+    const tempId = `temp-${Date.now()}`;
+    const newComm = {
+      id: tempId,
+      channel,
+      direction: "out",
+      occurredAt: Date.now(),
+      subject: "",
+      bodyText: "",
+      source: "manual",
+      isNew: true,
+    };
+    setDetailComms((prev) => [newComm, ...prev]);
+  };
+
+  // Save manual communication log to SQLite
+  const handleSaveManualComm = async (comm: any) => {
     if (!detailCompany) return;
     try {
-      setIsSavingLog(true);
-      const calledAt = callDate ? new Date(callDate).getTime() : null;
-      const emailedAt = emailDate ? new Date(emailDate).getTime() : null;
-
-      const res = await fetch(`/api/companies/${detailCompany.id}`, {
-        method: "PATCH",
+      const res = await fetch(`/api/companies/${detailCompany.id}/communications`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          lastCalledAt: calledAt,
-          lastCalledNote: callNote,
-          lastEmailedAt: emailedAt,
-          lastEmailedNote: emailNote,
+          channel: comm.channel,
+          occurredAt: comm.occurredAt,
+          note: comm.subject,
         }),
       });
       const data = await res.json();
-      if (!data.error) {
-        // Refresh local details view
-        setDetailCompany((prev: any) => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            lastCalledAt: calledAt,
-            lastCalledNote: callNote,
-            lastEmailedAt: emailedAt,
-            lastEmailedNote: emailNote,
-          };
-        });
-        // Also refresh the main companies list
+      if (!data.error && data.communication) {
+        setDetailComms((prev) =>
+          prev.map((item) => (item.id === comm.id ? data.communication : item))
+        );
         setCompanies((prev) =>
           prev.map((c) =>
             c.id === detailCompany.id
-              ? {
-                  ...c,
-                  lastCalledAt: calledAt,
-                  lastCalledNote: callNote,
-                  lastEmailedAt: emailedAt,
-                  lastEmailedNote: emailNote,
-                }
+              ? { ...c, commCount: (c.commCount ?? 0) + 1 }
               : c
           )
         );
       }
     } catch (e) {
-      console.error("Error saving CRM logs:", e);
-    } finally {
-      setIsSavingLog(false);
+      console.error("Error saving manual communication:", e);
+    }
+  };
+
+  // Delete manual communication log
+  const handleDeleteManualComm = async (commId: number) => {
+    if (!detailCompany) return;
+    if (!confirm("Are you sure you want to delete this interaction log?")) return;
+    try {
+      const res = await fetch(`/api/companies/${detailCompany.id}/communications?commId=${commId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setDetailComms((prev) => prev.filter((item) => item.id !== commId));
+        setCompanies((prev) =>
+          prev.map((c) =>
+            c.id === detailCompany.id
+              ? { ...c, commCount: Math.max(0, (c.commCount ?? 0) - 1) }
+              : c
+          )
+        );
+      }
+    } catch (e) {
+      console.error("Error deleting communication:", e);
     }
   };
 
@@ -1377,6 +1395,20 @@ export default function Dashboard() {
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
                       <button
+                        onClick={() => handleAddManualComm("call")}
+                        className="p-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-300 hover:text-indigo-400 cursor-pointer"
+                        title="Log a phone call"
+                      >
+                        <Phone className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleAddManualComm("email")}
+                        className="p-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-300 hover:text-indigo-400 cursor-pointer"
+                        title="Log an email"
+                      >
+                        <Mail className="h-3.5 w-3.5" />
+                      </button>
+                      <button
                         onClick={() => handleSingleCrawl(detailCompany.id)}
                         disabled={isCrawlingSingle}
                         className="p-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-300 cursor-pointer disabled:opacity-40"
@@ -1397,68 +1429,6 @@ export default function Dashboard() {
                     <MapPin className="h-3 w-3 flex-shrink-0" />
                     {detailCompany.address || detailCompany.city || "Slovakia"}
                   </p>
-                </div>
-
-                {/* CRM Call & Email Logs */}
-                <div className="bg-slate-950/40 border border-white/5 rounded-xl p-3.5 flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Interaction History</h4>
-                    <button
-                      onClick={handleSaveLogs}
-                      disabled={isSavingLog}
-                      className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 transition flex items-center gap-1 cursor-pointer disabled:opacity-40"
-                    >
-                      {isSavingLog ? (
-                        <RefreshCw className="h-3 w-3 animate-spin" />
-                      ) : (
-                        "Save Interaction"
-                      )}
-                    </button>
-                  </div>
-                  
-                  {/* Call Log Row */}
-                  <div className="flex flex-col gap-1.5 border-b border-white/5 pb-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-slate-300 flex items-center gap-1">
-                        <span>📞</span> Call Timestamp
-                      </span>
-                      <input
-                        type="datetime-local"
-                        value={callDate}
-                        onChange={(e) => setCallDate(e.target.value)}
-                        className="bg-slate-900 border border-white/10 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[155px]"
-                      />
-                    </div>
-                    <input
-                      type="text"
-                      value={callNote}
-                      onChange={(e) => setCallNote(e.target.value)}
-                      placeholder="Add call notes..."
-                      className="bg-slate-900 border border-white/10 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-full"
-                    />
-                  </div>
-
-                  {/* Email Log Row */}
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-slate-300 flex items-center gap-1">
-                        <span>✉️</span> Mail Timestamp
-                      </span>
-                      <input
-                        type="datetime-local"
-                        value={emailDate}
-                        onChange={(e) => setEmailDate(e.target.value)}
-                        className="bg-slate-900 border border-white/10 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[155px]"
-                      />
-                    </div>
-                    <input
-                      type="text"
-                      value={emailNote}
-                      onChange={(e) => setEmailNote(e.target.value)}
-                      placeholder="Add email notes..."
-                      className="bg-slate-900 border border-white/10 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-full"
-                    />
-                  </div>
                 </div>
 
               {/* Audit Score Breakdown */}
@@ -1662,8 +1632,8 @@ export default function Dashboard() {
               {/* Communications / Email history */}
               <div className="flex flex-col gap-2 mt-2 border-t border-white/5 pt-3">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <Mail className="h-3.5 w-3.5" />
-                  <span>Emails</span>
+                  <Clock className="h-3.5 w-3.5" />
+                  <span>Interaction Logs</span>
                   {detailComms.length > 0 && (
                     <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded">
                       {detailComms.length}
@@ -1671,10 +1641,65 @@ export default function Dashboard() {
                   )}
                 </h4>
                 {detailComms.length === 0 ? (
-                  <div className="text-xs text-slate-600 italic">No email correspondence on record.</div>
+                  <div className="text-xs text-slate-600 italic">No email or call correspondence on record.</div>
                 ) : (
                   <div className="flex flex-col gap-1.5 max-h-[280px] overflow-y-auto pr-1">
                     {detailComms.map((m: any) => {
+                      if (m.isNew) {
+                        return (
+                          <div
+                            key={m.id}
+                            className="text-xs rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-2 flex flex-col gap-2"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1">
+                                {m.channel === "call" ? "📞 New Call" : "✉️ New Email"}
+                              </span>
+                              <input
+                                type="datetime-local"
+                                defaultValue={new Date(m.occurredAt - new Date().getTimezoneOffset() * 60 * 1000).toISOString().slice(0, 16)}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  m.occurredAt = val ? new Date(val).getTime() : Date.now();
+                                }}
+                                className="bg-slate-900 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-200 focus:outline-none"
+                              />
+                            </div>
+                            <div className="flex gap-1.5 items-center">
+                              <input
+                                type="text"
+                                placeholder="Note..."
+                                onChange={(e) => {
+                                  m.subject = e.target.value;
+                                  m.bodyText = e.target.value;
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    handleSaveManualComm(m);
+                                  }
+                                }}
+                                className="bg-slate-900 border border-white/10 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 flex-1"
+                              />
+                              <button
+                                onClick={() => handleSaveManualComm(m)}
+                                className="px-2 py-0.5 rounded bg-indigo-500 text-white font-bold text-[10px] hover:bg-indigo-600 transition cursor-pointer"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setDetailComms((prev) => prev.filter((item) => item.id !== m.id));
+                                }}
+                                className="p-0.5 rounded hover:bg-white/5 text-slate-400 hover:text-rose-400 transition cursor-pointer"
+                                title="Discard"
+                              >
+                                <XCircle className="h-4.5 w-4.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       const out = m.direction === "out";
                       const open = expandedComm === m.id;
                       return (
@@ -1686,39 +1711,61 @@ export default function Dashboard() {
                             onClick={() => setExpandedComm(open ? null : m.id)}
                             className="w-full text-left px-2.5 py-1.5 flex items-start gap-2 hover:bg-white/5 transition cursor-pointer"
                           >
-                            {out ? (
-                              <ArrowUpRight className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-400" />
-                            ) : (
-                              <ArrowDownLeft className="h-3.5 w-3.5 mt-0.5 shrink-0 text-cyan-400" />
-                            )}
+                            <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                              {out ? (
+                                <ArrowUpRight className="h-3.5 w-3.5 text-emerald-400" />
+                              ) : (
+                                <ArrowDownLeft className="h-3.5 w-3.5 text-cyan-400" />
+                              )}
+                              {m.channel === "call" ? (
+                                <Phone className="h-3 w-3 text-indigo-400" />
+                              ) : (
+                                <Mail className="h-3 w-3 text-sky-400" />
+                              )}
+                            </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-2">
                                 <span className="text-slate-300 truncate">
-                                  {out ? "To" : "From"}: {m.counterpartyName || m.counterpartyEmail || "—"}
+                                  {m.source === "manual"
+                                    ? `${m.channel === "call" ? "Call Note" : "Email Note"}`
+                                    : `${out ? "To" : "From"}: ${m.counterpartyName || m.counterpartyEmail || "—"}`}
                                 </span>
                                 <span className="text-[10px] text-slate-500 shrink-0">{formatDate(m.occurredAt)}</span>
                               </div>
                               <div className="text-slate-200 font-semibold truncate">
-                                {m.subject || <span className="text-slate-500 italic font-normal">(no subject)</span>}
+                                {m.subject || <span className="text-slate-500 italic font-normal">(no subject/note)</span>}
                               </div>
                             </div>
                           </button>
                           {open && (
                             <div className="px-2.5 pb-2.5 pt-1 border-t border-white/5">
-                              <div className="text-[10px] text-slate-500 mb-1.5 break-all">
-                                {out ? "→ " : "← "}{m.counterpartyEmail}
-                                {m.counterpartyEmail && (
-                                  <a
-                                    href={`mailto:${m.counterpartyEmail}`}
-                                    className="ml-2 text-indigo-400 hover:text-indigo-300 underline"
-                                  >
-                                    reply
-                                  </a>
-                                )}
-                              </div>
+                              {m.source !== "manual" && (
+                                <div className="text-[10px] text-slate-500 mb-1.5 break-all">
+                                  {out ? "→ " : "← "}{m.counterpartyEmail}
+                                  {m.counterpartyEmail && (
+                                    <a
+                                      href={`mailto:${m.counterpartyEmail}`}
+                                      className="ml-2 text-indigo-400 hover:text-indigo-300 underline"
+                                    >
+                                      reply
+                                    </a>
+                                  )}
+                                </div>
+                              )}
                               <pre className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-300 max-h-[220px] overflow-y-auto font-sans">
-                                {m.bodyText || <span className="text-slate-600 italic">No text content.</span>}
+                                {m.bodyText || <span className="text-slate-600 italic">No description.</span>}
                               </pre>
+                              {m.source === "manual" && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteManualComm(m.id);
+                                  }}
+                                  className="mt-2 text-rose-400 hover:text-rose-300 hover:underline text-[10px] font-bold flex items-center gap-0.5 cursor-pointer"
+                                >
+                                  Delete Log
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
