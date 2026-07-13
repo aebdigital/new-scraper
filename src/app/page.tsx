@@ -45,7 +45,8 @@ import {
   GraduationCap,
   HeartPulse,
   Palette,
-  Wrench
+  Wrench,
+  Pencil
 } from "lucide-react";
 
 interface Company {
@@ -599,6 +600,10 @@ export default function Dashboard() {
   const [expandedComm, setExpandedComm] = useState<number | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // Inline website editing state
+  const [editingWebsiteCompanyId, setEditingWebsiteCompanyId] = useState<number | null>(null);
+  const [editingWebsiteValue, setEditingWebsiteValue] = useState("");
+
   // CRM call/email logging states
   const [callNote, setCallNote] = useState("");
   const [callDate, setCallDate] = useState("");
@@ -636,6 +641,68 @@ export default function Dashboard() {
       console.error(e);
     } finally {
       setStatsLoading(false);
+    }
+  };
+
+  const handleSaveWebsite = async (companyId: number) => {
+    const original = companies.find(c => c.id === companyId);
+    if (!original) {
+      setEditingWebsiteCompanyId(null);
+      return;
+    }
+
+    const newVal = editingWebsiteValue.trim();
+    if (newVal === (original.website || "")) {
+      setEditingWebsiteCompanyId(null);
+      return;
+    }
+
+    try {
+      // Optimistically update local UI state
+      setCompanies(prev => prev.map(c => {
+        if (c.id === companyId) {
+          let domain = null;
+          if (newVal) {
+            try {
+              const url = newVal.startsWith("http") ? newVal : `https://${newVal}`;
+              const parsed = new URL(url);
+              domain = parsed.hostname.toLowerCase();
+              if (domain.startsWith("www.")) domain = domain.substring(4);
+            } catch (e) {
+              domain = newVal.toLowerCase().replace(/https?:\/\/(www\.)?/, "");
+            }
+          }
+          return { ...c, website: newVal || null, domain, status: "pending", leadScore: 0 };
+        }
+        return c;
+      }));
+
+      if (detailCompany && detailCompany.id === companyId) {
+        setDetailCompany(prev => prev ? {
+          ...prev,
+          website: newVal || null,
+          domain: newVal ? (newVal.startsWith("http") ? newVal.replace(/https?:\/\/(www\.)?/, "") : newVal.toLowerCase()) : null,
+          status: "pending",
+          leadScore: 0
+        } : null);
+      }
+
+      setEditingWebsiteCompanyId(null);
+
+      const res = await fetch(`/api/companies/${companyId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ website: newVal }),
+      });
+
+      const data = await res.json();
+      if (data.error) {
+        console.error("Failed to save website:", data.error);
+        fetchCompanies();
+      }
+    } catch (err) {
+      console.error(err);
+      fetchCompanies();
     }
   };
 
@@ -1375,20 +1442,59 @@ export default function Dashboard() {
                           )}
                         </div>
                       </td>
-                      <td className="py-1.5 px-3">
-                        {c.domain ? (
-                          <a
-                            href={c.website || `https://${c.domain}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                      <td 
+                        className="py-1.5 px-3 min-w-[150px]"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (editingWebsiteCompanyId !== c.id) {
+                            setEditingWebsiteCompanyId(c.id);
+                            setEditingWebsiteValue(c.website || "");
+                          }
+                        }}
+                      >
+                        {editingWebsiteCompanyId === c.id ? (
+                          <input
+                            type="text"
+                            value={editingWebsiteValue}
+                            onChange={(e) => setEditingWebsiteValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleSaveWebsite(c.id);
+                              if (e.key === "Escape") setEditingWebsiteCompanyId(null);
+                            }}
+                            onBlur={() => handleSaveWebsite(c.id)}
                             onClick={(e) => e.stopPropagation()}
-                            className="text-indigo-400 hover:text-indigo-300 hover:underline font-medium text-xs flex items-center gap-1 inline-flex"
-                          >
-                            <span>{c.domain}</span>
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
+                            className="w-full bg-slate-950/80 border border-indigo-500/50 rounded px-2 py-0.5 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 placeholder-slate-600"
+                            placeholder="Enter URL..."
+                            autoFocus
+                          />
                         ) : (
-                          <span className="text-slate-600">—</span>
+                          <div className="group flex items-center justify-between gap-1.5 cursor-pointer">
+                            {c.domain ? (
+                              <a
+                                href={c.website || `https://${c.domain}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-indigo-400 hover:text-indigo-300 hover:underline font-medium text-xs flex items-center gap-1 inline-flex"
+                              >
+                                <span>{c.domain}</span>
+                                <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                              </a>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingWebsiteCompanyId(c.id);
+                                setEditingWebsiteValue(c.website || "");
+                              }}
+                              className="opacity-0 group-hover:opacity-100 transition p-0.5 text-slate-400 hover:text-indigo-400"
+                              title="Edit website"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          </div>
                         )}
                       </td>
                       <td className="py-1.5 px-3 text-right text-slate-300 font-medium whitespace-nowrap">
