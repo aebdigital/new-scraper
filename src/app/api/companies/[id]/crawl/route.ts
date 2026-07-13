@@ -92,6 +92,63 @@ export async function GET(
       return NextResponse.json({ error: "Company not found" }, { status: 404 });
     }
 
+    // Fetch and cache historical financial charts from FinStat on-the-fly if missing
+    if (company.ico && !company.financialHistory) {
+      try {
+        const url = `https://finstat.sk/${company.ico}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 seconds timeout max
+
+        const res = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          }
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const html = await res.text();
+
+          const chartRegex = /\.finstatChart\((.*?)\);/g;
+          let match;
+          let zisk = null;
+          let trzby = null;
+
+          while ((match = chartRegex.exec(html)) !== null) {
+            try {
+              const parsed = JSON.parse(match[1]);
+              if (parsed.title === "Zisk") {
+                zisk = {
+                  categories: parsed.categories,
+                  values: parsed.series[0]?.data.map((d: any) => d.y) || []
+                };
+              } else if (parsed.title === "Tržby" || parsed.title === "Tr\u017eby") {
+                trzby = {
+                  categories: parsed.categories,
+                  values: parsed.series[0]?.data.map((d: any) => d.y) || []
+                };
+              }
+            } catch (e) {
+              // Ignored
+            }
+          }
+
+          if (zisk || trzby) {
+            const history = JSON.stringify({ zisk, trzby });
+            await db
+              .update(companies)
+              .set({ financialHistory: history })
+              .where(eq(companies.id, companyId));
+
+            company.financialHistory = history;
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to fetch FinStat history for ICO ${company.ico}:`, err);
+      }
+    }
+
     const latestSnapshots = await db
       .select()
       .from(websiteSnapshots)

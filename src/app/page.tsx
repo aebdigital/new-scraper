@@ -71,6 +71,7 @@ interface Company {
   naceSubdivision: string | null;
   legalFormCode: string | null;
   commCount?: number;
+  financialHistory?: string | null;
 }
 
 interface Stats {
@@ -346,6 +347,201 @@ const getNaceDescription = (code: string | null) => {
   
   return code;
 };
+
+function MiniLineChart({
+  title,
+  subtitle,
+  categories,
+  values,
+  color = "#39bf87",
+}: {
+  title: string;
+  subtitle: string;
+  categories: string[];
+  values: number[];
+  color?: string;
+}) {
+  if (!categories || !values || categories.length === 0 || values.length === 0) {
+    return null;
+  }
+
+  // Format utility
+  const formatMoney = (val: number | null) => {
+    if (val === null || val === undefined) return "-";
+    if (Math.abs(val) >= 1000000) {
+      return `${(val / 1000000).toFixed(1)}M €`;
+    }
+    return `${val.toLocaleString("sk-SK")} €`;
+  };
+
+  // Dimensions of SVG
+  const width = 450;
+  const height = 180;
+
+  // Padding
+  const paddingLeft = 45;
+  const paddingRight = 45;
+  const paddingTop = 40;
+  const paddingBottom = 35;
+
+  const chartWidth = width - paddingLeft - paddingRight;
+  const chartHeight = height - paddingTop - paddingBottom;
+
+  // Find min and max for scaling
+  const maxVal = Math.max(...values, 0);
+  const minVal = Math.min(...values, 0);
+  const valueRange = maxVal - minVal || 1;
+
+  // Helper to map values to coordinates
+  const getX = (index: number) => {
+    if (values.length <= 1) return paddingLeft + chartWidth / 2;
+    return paddingLeft + (index / (values.length - 1)) * chartWidth;
+  };
+
+  const getY = (val: number) => {
+    const ratio = (val - minVal) / valueRange;
+    return height - paddingBottom - ratio * chartHeight;
+  };
+
+  // Build the line path
+  const points = values.map((val, idx) => ({ x: getX(idx), y: getY(val) }));
+
+  let linePath = "";
+  let areaPath = "";
+
+  if (points.length > 0) {
+    linePath = `M ${points[0].x} ${points[0].y} ` + points.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
+
+    // For area path, go down to the minVal level (which represents the baseline)
+    const baselineY = getY(0);
+    areaPath = `${linePath} L ${points[points.length - 1].x} ${baselineY} L ${points[0].x} ${baselineY} Z`;
+  }
+
+  return (
+    <div className="bg-slate-950/40 border border-white/5 rounded-xl p-4 flex flex-col w-full select-none">
+      {/* Header */}
+      <div className="flex justify-between items-start mb-2">
+        <div>
+          <span className="text-xs font-bold text-slate-400 block">{title}</span>
+          <span className="text-[10px] text-slate-500 block">{subtitle}</span>
+        </div>
+        <span className="text-[8px] tracking-wider text-slate-600 font-medium uppercase mt-0.5">FinStat.sk</span>
+      </div>
+
+      {/* SVG Canvas */}
+      <div className="relative w-full h-[180px]">
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full overflow-visible">
+          {/* Gradients */}
+          <defs>
+            <linearGradient id={`grad-${title.replace(/\s+/g, "")}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={color} stopOpacity="0.2" />
+              <stop offset="100%" stopColor={color} stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+
+          {/* Reference baseline grid lines */}
+          <line
+            x1={paddingLeft}
+            y1={getY(0)}
+            x2={width - paddingRight}
+            y2={getY(0)}
+            stroke="rgba(255,255,255,0.06)"
+            strokeDasharray="4 4"
+            strokeWidth="1"
+          />
+
+          {/* Vertical dashed lines for each year category */}
+          {categories.map((cat, idx) => {
+            const x = getX(idx);
+            return (
+              <line
+                key={idx}
+                x1={x}
+                y1={paddingTop - 10}
+                x2={x}
+                y2={height - paddingBottom}
+                stroke="rgba(255,255,255,0.04)"
+                strokeDasharray="3 3"
+                strokeWidth="1"
+              />
+            );
+          })}
+
+          {/* Area Fill */}
+          {areaPath && (
+            <path
+              d={areaPath}
+              fill={`url(#grad-${title.replace(/\s+/g, "")})`}
+              className="transition-all duration-300"
+            />
+          )}
+
+          {/* Connected Line */}
+          {linePath && (
+            <path
+              d={linePath}
+              fill="none"
+              stroke={color}
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="transition-all duration-300"
+            />
+          )}
+
+          {/* Dots and Value Labels */}
+          {points.map((p, idx) => {
+            const val = values[idx];
+            const formatted = formatMoney(val);
+            const isNegative = val < 0;
+
+            return (
+              <g key={idx} className="group cursor-pointer">
+                <circle
+                  cx={p.x}
+                  cy={p.y}
+                  r="4.5"
+                  fill="#020617"
+                  stroke={color}
+                  strokeWidth="2.5"
+                  className="transition-all duration-200 hover:r-6"
+                />
+
+                <text
+                  x={p.x}
+                  y={p.y - 12}
+                  textAnchor="middle"
+                  fill={isNegative ? "#f87171" : "#e2e8f0"}
+                  className="text-[9px] font-bold select-none"
+                >
+                  {formatted}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* X Axis Year Labels */}
+          {categories.map((cat, idx) => {
+            const x = getX(idx);
+            const displayCat = cat.replace(/\s*\[.*\]/g, "");
+            return (
+              <text
+                key={idx}
+                x={x}
+                y={height - 10}
+                textAnchor="middle"
+                fill="#64748b"
+                className="text-[10px] font-medium"
+              >
+                {displayCat}
+              </text>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   // Tab state
@@ -1458,32 +1654,80 @@ export default function Dashboard() {
               </div>
 
               {/* Financial Data (if matched from FinStat) */}
-              {detailCompany.revenue !== null && detailCompany.revenue !== undefined && (
-                <div className="flex flex-col gap-2.5 border-t border-white/5 pt-4">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Financial Intelligence</h4>
-                  <div className="grid grid-cols-3 gap-2 text-center text-xs mt-1">
-                    <div className="p-2 bg-white/2 border border-white/5 rounded-xl">
-                      <span className="text-[10px] text-slate-500 block">Tržby</span>
-                      <span className="font-bold text-emerald-400">
-                        {detailCompany.revenue >= 1000000 ? `${(detailCompany.revenue / 1000000).toFixed(1)}M €` : `${detailCompany.revenue.toLocaleString()} €`}
-                      </span>
-                    </div>
-                    <div className="p-2 bg-white/2 border border-white/5 rounded-xl">
-                      <span className="text-[10px] text-slate-500 block">Zisk</span>
-                      <span className={`font-bold ${(detailCompany.profit || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                        {(detailCompany.profit || 0) >= 1000000 ? `${((detailCompany.profit || 0) / 1000000).toFixed(1)}M €` : `${(detailCompany.profit || 0).toLocaleString()} €`}
-                      </span>
-                    </div>
-                    <div className="p-2 bg-white/2 border border-white/5 rounded-xl">
-                      <span className="text-[10px] text-slate-500 block">Aktíva</span>
-                      <span className="font-bold text-cyan-400">
-                        {(detailCompany.assets || 0) >= 1000000 ? `${((detailCompany.assets || 0) / 1000000).toFixed(1)}M €` : `${(detailCompany.assets || 0).toLocaleString()} €`}
-                      </span>
-                    </div>
+              {detailCompany.revenue !== null && detailCompany.revenue !== undefined && (() => {
+                let historyData = null;
+                if (detailCompany.financialHistory) {
+                  try {
+                    historyData = JSON.parse(detailCompany.financialHistory);
+                  } catch (e) {}
+                }
+
+                return (
+                  <div className="flex flex-col gap-3.5 border-t border-white/5 pt-4">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Financial Intelligence</h4>
+
+                    {historyData && historyData.zisk && historyData.trzby ? (
+                      <div className="flex flex-col gap-3">
+                        {/* Zisk Chart */}
+                        <MiniLineChart
+                          title="Zisk"
+                          subtitle={detailCompany.name}
+                          categories={historyData.zisk.categories}
+                          values={historyData.zisk.values}
+                          color="#39bf87"
+                        />
+                        {/* Tržby Chart */}
+                        <MiniLineChart
+                          title="Tržby"
+                          subtitle={detailCompany.name}
+                          categories={historyData.trzby.categories}
+                          values={historyData.trzby.values}
+                          color="#39bf87"
+                        />
+                        {/* Aktíva & financial metadata below */}
+                        <div className="grid grid-cols-2 gap-3 text-xs mt-1">
+                          <div className="p-3 bg-white/2 border border-white/5 rounded-xl flex flex-col gap-0.5">
+                            <span className="text-[10px] text-slate-500 uppercase font-semibold">Aktíva</span>
+                            <span className="font-extrabold text-cyan-400 text-sm mt-0.5">
+                              {(detailCompany.assets || 0) >= 1000000 ? `${((detailCompany.assets || 0) / 1000000).toFixed(1)}M €` : `${(detailCompany.assets || 0).toLocaleString()} €`}
+                            </span>
+                          </div>
+                          <div className="p-3 bg-white/2 border border-white/5 rounded-xl flex flex-col gap-0.5 justify-center">
+                            <span className="text-[10px] text-slate-500 uppercase font-semibold">Financial Year</span>
+                            <span className="font-bold text-slate-300 text-sm mt-0.5">
+                              {detailCompany.financialYear || "N/A"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Fallback standard 3-column stats if history not loaded yet */
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs mt-1">
+                        <div className="p-2 bg-white/2 border border-white/5 rounded-xl">
+                          <span className="text-[10px] text-slate-500 block">Tržby</span>
+                          <span className="font-bold text-emerald-400">
+                            {detailCompany.revenue >= 1000000 ? `${(detailCompany.revenue / 1000000).toFixed(1)}M €` : `${detailCompany.revenue.toLocaleString()} €`}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-white/2 border border-white/5 rounded-xl">
+                          <span className="text-[10px] text-slate-500 block">Zisk</span>
+                          <span className={`font-bold ${(detailCompany.profit || 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                            {(detailCompany.profit || 0) >= 1000000 ? `${((detailCompany.profit || 0) / 1000000).toFixed(1)}M €` : `${(detailCompany.profit || 0).toLocaleString()} €`}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-white/2 border border-white/5 rounded-xl">
+                          <span className="text-[10px] text-slate-500 block">Aktíva</span>
+                          <span className="font-bold text-cyan-400">
+                            {(detailCompany.assets || 0) >= 1000000 ? `${((detailCompany.assets || 0) / 1000000).toFixed(1)}M €` : `${(detailCompany.assets || 0).toLocaleString()} €`}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="text-[9px] text-slate-600 text-right mt-0.5">Source: FinStat ({detailCompany.financialYear})</div>
                   </div>
-                  <div className="text-[9px] text-slate-600 text-right mt-0.5">Source: FinStat ({detailCompany.financialYear})</div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Website Tech Stack */}
               {detailSnapshot ? (

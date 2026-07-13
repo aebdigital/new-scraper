@@ -36,8 +36,8 @@ export const companies = sqliteTable("companies", {
   lastCalledNote: text("last_called_note"),
   lastEmailedAt: integer("last_emailed_at"),
   lastEmailedNote: text("last_emailed_note"),
+  financialHistory: text("financial_history"), // JSON-serialized history of FinStat charts
   createdAt: integer("created_at").$defaultFn(() => Date.now()),
-
 }, (table) => ({
   leadScoreIdx: index("idx_companies_lead_score").on(table.leadScore),
   statusScoreIdx: index("idx_companies_status_score").on(table.status, table.leadScore),
