@@ -1165,11 +1165,10 @@ export default function Dashboard() {
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="hover:text-indigo-400 hover:underline cursor-pointer transition flex items-center gap-1 text-slate-100"
+                            className="hover:text-indigo-400 hover:underline cursor-pointer transition text-slate-100"
                             title={`Search "${c.name}" on Google`}
                           >
-                            <span>{c.name}</span>
-                            <Search className="h-3 w-3 text-slate-500 hover:text-indigo-400 inline" />
+                            {c.name}
                           </a>
                           {(c.commCount ?? 0) > 0 && (
                             <span
