@@ -47,6 +47,7 @@ import {
   Palette,
   Wrench,
   Pencil,
+  CalendarDays,
   Trash2
 } from "lucide-react";
 
@@ -354,6 +355,164 @@ const getNaceDescription = (code: string | null) => {
   return code;
 };
 
+const cleanCrmLogNote = (note: string | null | undefined) =>
+  (note || "")
+    .replace(/^\[(REMIND|NOANSWER|INTEREST|DECLINE)\]\s*/i, "")
+    .replace(/^Nový záujem – poslať mail$/i, "")
+    .trim();
+
+const getCrmOutcome = (note: string | null | undefined) => {
+  const text = (note || "").trim().toLowerCase();
+  if (!text) return null;
+  if (text.startsWith("[crm:remind]") || text.startsWith("[remind]") || text.includes("zavolať znova") || text.includes("pripomenúť ďalší deň")) return "remind";
+  if (text.startsWith("[crm:noanswer]") || text.startsWith("[noanswer]") || text.includes("nezdvihol")) return "noanswer";
+  if (text.startsWith("[crm:interest]") || text.startsWith("[interest]") || text.includes("nový záujem")) return "interest";
+  if (text.startsWith("[crm:decline]") || text.startsWith("[decline]") || text.includes("odmietol") || text.includes("decline")) return "decline";
+  return null;
+};
+
+const getTomorrowDateValue = () => {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return toLocalDateValue(tomorrow);
+};
+
+const toLocalDateValue = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
+const formatReminderDate = (dateValue: string) => {
+  const date = new Date(`${dateValue}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return dateValue;
+  return date.toLocaleDateString("sk-SK", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+};
+
+const parseReminderDateValue = (note: string | null | undefined) => {
+  const text = cleanCrmLogNote(note);
+  const skDate = text.match(/(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})/);
+  if (skDate) {
+    const [, day, month, year] = skDate;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+  const isoDate = text.match(/(\d{4})-(\d{2})-(\d{2})/);
+  return isoDate ? isoDate[0] : "";
+};
+
+const parseReminderNoteText = (note: string | null | undefined) => {
+  let text = cleanCrmLogNote(note)
+    .replace(/^Pripomenúť:\s*/i, "")
+    .trim();
+
+  let previous = "";
+  while (text !== previous) {
+    previous = text;
+    text = text
+      .replace(/^Pripomenúť:\s*/i, "")
+      .replace(/\d{1,2}\.\s*\d{1,2}\.\s*\d{4}\s*[-–—|:]?\s*/g, "")
+      .replace(/\d{4}-\d{2}-\d{2}\s*[-–—|:]?\s*/g, "")
+      .trim();
+  }
+
+  return text;
+};
+
+const buildReminderNote = (dateValue: string, noteText = "") => {
+  const note = parseReminderNoteText(noteText);
+  return note ? `Pripomenúť: ${formatReminderDate(dateValue)} – ${note}` : `Pripomenúť: ${formatReminderDate(dateValue)}`;
+};
+
+function ReminderDatePicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const selectedDate = value ? new Date(`${value}T00:00:00`) : new Date();
+  const [viewMonth, setViewMonth] = useState(
+    new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1)
+  );
+
+  useEffect(() => {
+    if (value) {
+      const nextDate = new Date(`${value}T00:00:00`);
+      if (!Number.isNaN(nextDate.getTime())) {
+        setViewMonth(new Date(nextDate.getFullYear(), nextDate.getMonth(), 1));
+      }
+    }
+  }, [value]);
+
+  const monthLabel = viewMonth.toLocaleDateString("sk-SK", {
+    month: "long",
+    year: "numeric",
+  });
+  const monthStart = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), 1);
+  const offset = (monthStart.getDay() + 6) % 7;
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(monthStart.getDate() - offset);
+  const selectedValue = value;
+
+  return (
+    <div
+      className="absolute right-0 top-full mt-1 w-64 rounded-lg border border-amber-400/30 bg-slate-950 shadow-2xl shadow-black/40 p-2 z-[70]"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <button
+          type="button"
+          onClick={() => setViewMonth(new Date(viewMonth.getFullYear(), viewMonth.getMonth() - 1, 1))}
+          className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white"
+          aria-label="Predchádzajúci mesiac"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span className="text-xs font-bold text-slate-100 capitalize">{monthLabel}</span>
+        <button
+          type="button"
+          onClick={() => setViewMonth(new Date(viewMonth.getFullYear(), viewMonth.getMonth() + 1, 1))}
+          className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white"
+          aria-label="Ďalší mesiac"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-500 mb-1">
+        {["Po", "Ut", "St", "Št", "Pi", "So", "Ne"].map((day) => (
+          <span key={day}>{day}</span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
+        {Array.from({ length: 42 }, (_, idx) => {
+          const date = new Date(gridStart);
+          date.setDate(gridStart.getDate() + idx);
+          const dateValue = toLocalDateValue(date);
+          const inMonth = date.getMonth() === viewMonth.getMonth();
+          const selected = dateValue === selectedValue;
+          return (
+            <button
+              key={dateValue}
+              type="button"
+              onClick={() => onChange(dateValue)}
+              className={`h-7 rounded text-xs font-semibold transition ${
+                selected
+                  ? "bg-amber-400 text-slate-950"
+                  : inMonth
+                  ? "text-slate-200 hover:bg-amber-400/20 hover:text-amber-100"
+                  : "text-slate-700 hover:bg-white/5"
+              }`}
+            >
+              {date.getDate()}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MiniLineChart({
   title,
   subtitle,
@@ -617,6 +776,12 @@ export default function Dashboard() {
   const [inlineLogCompanyId, setInlineLogCompanyId] = useState<number | null>(null);
   const [inlineLogType, setInlineLogType] = useState<"call" | "email" | null>(null);
   const [inlineLogNote, setInlineLogNote] = useState("");
+  const [reminderDateCompanyId, setReminderDateCompanyId] = useState<number | null>(null);
+  const [reminderDateValue, setReminderDateValue] = useState("");
+  const [reminderNoteValue, setReminderNoteValue] = useState("");
+  const [editingReminderLogId, setEditingReminderLogId] = useState<number | null>(null);
+  const [openReminderCalendarLogId, setOpenReminderCalendarLogId] = useState<number | null>(null);
+  const [editingReminderDateValue, setEditingReminderDateValue] = useState("");
 
   // CRM log note editing
   const [editingLogId, setEditingLogId] = useState<number | null>(null);
@@ -1106,20 +1271,22 @@ export default function Dashboard() {
   };
 
   // Quick call outcome log (no typing needed)
-  const handleQuickCallLog = async (companyId: number, outcome: "remind" | "noanswer" | "interest") => {
+  const handleQuickCallLog = async (companyId: number, outcome: "remind" | "noanswer" | "interest" | "decline") => {
     const noteMap = {
-      remind: "[REMIND] Zavolať znova",
-      noanswer: "[NOANSWER] Nezdvihol",
-      interest: "[INTEREST] Nový záujem – poslať mail",
+      remind: "Pripomenúť ďalší deň",
+      noanswer: "Nezdvihol",
+      interest: "",
+      decline: "",
     };
     try {
       const res = await fetch(`/api/companies/${companyId}/communications`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          channel: outcome === "interest" ? "email" : "call",
+          channel: "call",
           occurredAt: Date.now(),
           note: noteMap[outcome],
+          outcome,
         }),
       });
       const data = await res.json();
@@ -1130,6 +1297,61 @@ export default function Dashboard() {
     } catch (e) {
       console.error("Error saving quick call log:", e);
     }
+  };
+
+  const openReminderDatePicker = (companyId: number) => {
+    setReminderDateCompanyId(companyId);
+    setReminderDateValue(getTomorrowDateValue());
+    setReminderNoteValue("");
+  };
+
+  const handleSaveReminderDate = async (companyId: number, dateValue = reminderDateValue) => {
+    if (!dateValue) return;
+
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: "call",
+          occurredAt: Date.now(),
+          note: buildReminderNote(dateValue, reminderNoteValue),
+          outcome: "remind",
+        }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setReminderDateCompanyId(null);
+        setReminderDateValue("");
+        setReminderNoteValue("");
+        fetchCRM(true);
+        fetchCompanies(true);
+      }
+    } catch (e) {
+      console.error("Error saving reminder date:", e);
+    }
+  };
+
+  const openReminderLogDatePicker = (logId: number, note: string | null | undefined) => {
+    setEditingLogId(null);
+    setOpenReminderCalendarLogId(logId);
+    setEditingReminderDateValue(parseReminderDateValue(note) || getTomorrowDateValue());
+  };
+
+  const openReminderLogNoteEditor = (logId: number, note: string | null | undefined) => {
+    setEditingLogId(null);
+    setOpenReminderCalendarLogId(null);
+    setEditingReminderLogId(logId);
+    setEditingReminderDateValue(parseReminderDateValue(note) || getTomorrowDateValue());
+    setEditingLogText(parseReminderNoteText(note));
+  };
+
+  const handleSaveReminderLog = async (commId: number, companyId: number, dateValue = editingReminderDateValue, noteText = editingLogText) => {
+    if (!dateValue) return;
+    await handleSaveCrmLogNote(commId, companyId, buildReminderNote(dateValue, noteText));
+    setEditingReminderLogId(null);
+    setOpenReminderCalendarLogId(null);
+    setEditingReminderDateValue("");
   };
 
   const handleSaveCrmLogNote = async (commId: number, companyId: number, newNote: string) => {
@@ -2687,6 +2909,7 @@ export default function Dashboard() {
                   name: string;
                   domain: string | null;
                   website: string | null;
+                  latestOccurredAt: number;
                   logs: any[];
                 }>;
               }> = {};
@@ -2727,14 +2950,26 @@ export default function Dashboard() {
                     name: log.companyName,
                     domain: log.companyDomain,
                     website: log.companyWebsite,
+                    latestOccurredAt: log.occurredAt,
                     logs: []
                   };
                 }
 
+                groups[dateStr].companies[log.companyId].latestOccurredAt = Math.max(
+                  groups[dateStr].companies[log.companyId].latestOccurredAt,
+                  log.occurredAt
+                );
                 groups[dateStr].companies[log.companyId].logs.push(log);
               });
 
-              return Object.values(groups).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+              return Object.values(groups)
+                .map((day) => {
+                  Object.values(day.companies).forEach((company) => {
+                    company.logs.sort((a: any, b: any) => b.occurredAt - a.occurredAt);
+                  });
+                  return day;
+                })
+                .sort((a, b) => b.dateStr.localeCompare(a.dateStr));
             })();
 
             if (groupedDays.length === 0) {
@@ -2752,7 +2987,7 @@ export default function Dashboard() {
             return (
               <div className="flex flex-col gap-6">
                 {groupedDays.map((day) => (
-                  <section key={day.dateStr} className="w-full glass-panel rounded-2xl overflow-hidden flex flex-col border border-white/5">
+                  <section key={day.dateStr} className="w-full glass-panel rounded-2xl overflow-visible flex flex-col border border-white/5">
                     {/* Day Header */}
                     <div className="p-4 bg-slate-950/40 border-b border-white/5 flex items-center justify-between">
                       <h3 className="font-extrabold text-sm text-emerald-400 flex items-center gap-2 capitalize">
@@ -2775,16 +3010,15 @@ export default function Dashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {Object.values(day.companies).map((c) => {
+                        {Object.values(day.companies).sort((a, b) => b.latestOccurredAt - a.latestOccurredAt).map((c) => {
                           const isInlineEditing = inlineLogCompanyId === c.id;
+                          const isReminderDatePicking = reminderDateCompanyId === c.id;
 
                           // Determine row color from last call outcome tag
                           const lastOutcome = (() => {
-                            for (let i = c.logs.length - 1; i >= 0; i--) {
-                              const n = c.logs[i].note || "";
-                              if (n.startsWith("[REMIND]")) return "remind";
-                              if (n.startsWith("[NOANSWER]")) return "noanswer";
-                              if (n.startsWith("[INTEREST]")) return "interest";
+                            for (let i = 0; i < c.logs.length; i++) {
+                              const outcome = getCrmOutcome(c.logs[i].subject) || getCrmOutcome(c.logs[i].note);
+                              if (outcome) return outcome;
                             }
                             return null;
                           })();
@@ -2795,12 +3029,24 @@ export default function Dashboard() {
                             ? "bg-slate-500/8 border-l-2 border-l-slate-500"
                             : lastOutcome === "interest"
                             ? "bg-emerald-500/8 border-l-2 border-l-emerald-400"
+                            : lastOutcome === "decline"
+                            ? "bg-rose-500/8 border-l-2 border-l-rose-400"
                             : "";
+
+                          const rowHoverBg = lastOutcome === "remind"
+                            ? "hover:bg-amber-500/12"
+                            : lastOutcome === "noanswer"
+                            ? "hover:bg-slate-500/12"
+                            : lastOutcome === "interest"
+                            ? "hover:bg-emerald-500/12"
+                            : lastOutcome === "decline"
+                            ? "hover:bg-rose-500/12"
+                            : "hover:bg-white/3";
 
                           return (
                             <tr
                               key={c.id}
-                              className={`border-b border-white/5 hover:bg-white/3 transition group ${rowBg}`}
+                              className={`border-b border-white/5 transition group ${rowBg} ${rowHoverBg}`}
                             >
                               {/* Company Name */}
                               <td className="py-1.5 px-4 font-semibold text-slate-100">
@@ -2830,8 +3076,8 @@ export default function Dashboard() {
                               </td>
 
                               {/* Activity Logs List */}
-                              <td className="py-1.5 px-3">
-                                <div className="flex flex-col gap-1.5">
+                              <td className="py-1 px-3">
+                                <div className="flex flex-col gap-1">
                                   {(() => {
                                     const manualLogs = c.logs.filter((log: any) => log.channel !== "view");
 
@@ -2848,19 +3094,96 @@ export default function Dashboard() {
                                         hour: "2-digit",
                                         minute: "2-digit"
                                       });
+                                      const logOutcome = getCrmOutcome(log.subject) || getCrmOutcome(log.note);
+                                      const visibleLogNote = cleanCrmLogNote(log.note || log.subject);
+                                      const reminderLogDateValue = parseReminderDateValue(log.note || log.subject);
+                                      const reminderLogNoteText = parseReminderNoteText(log.note || log.subject);
+                                      const activeReminderNoteText =
+                                        editingReminderLogId === log.id ? editingLogText : reminderLogNoteText;
 
                                       return (
-                                        <div key={log.id} className="text-xs flex items-center justify-between gap-3 bg-white/2 border border-white/5 rounded-lg p-2 max-w-xl group/log">
-                                          <div className="flex items-start gap-2">
-                                            <span className="text-[10px] shrink-0 text-slate-500 font-semibold mt-0.5">{logTime}</span>
-                                            <div className="flex items-start gap-1">
-                                              {log.channel === "call" ? (
+                                        <div key={log.id} className="text-xs flex items-center justify-between gap-2 bg-white/2 border border-white/5 rounded-md px-1.5 py-1 w-full group/log">
+                                          <div
+                                            className="flex items-center gap-2 flex-1 min-w-0 cursor-text"
+                                            onClick={() => {
+                                              if (logOutcome !== "remind") {
+                                                setEditingLogId(log.id);
+                                                setEditingLogText(visibleLogNote);
+                                              }
+                                            }}
+                                          >
+                                            <span className="text-[10px] shrink-0 text-slate-500 font-semibold">{logTime}</span>
+                                            <div className="flex items-center gap-1 flex-1 min-w-0">
+                                              {logOutcome === "interest" ? (
+                                                <span className="flex items-center gap-0.5 text-emerald-300 shrink-0" title="Poslať mail po hovore">
+                                                  <Phone className="h-3 w-3" />
+                                                  <ArrowUpRight className="h-2.5 w-2.5" />
+                                                  <Mail className="h-3 w-3" />
+                                                </span>
+                                              ) : logOutcome === "decline" ? (
+                                                <span className="text-rose-300 shrink-0 font-bold" title="Odmietol">❌</span>
+                                              ) : log.channel === "call" ? (
                                                 <span className="text-indigo-400 shrink-0 font-bold">📞</span>
                                               ) : (
                                                 <span className="text-sky-400 shrink-0 font-bold">✉️</span>
                                               )}
-                                              <div className="flex flex-col flex-1">
-                                                {editingLogId === log.id ? (
+                                              <div className="flex flex-col flex-1 min-w-0">
+                                                {logOutcome === "remind" ? (
+                                                  <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-1.5 w-full">
+                                                    <div className="relative">
+                                                      <button
+                                                        type="button"
+                                                        className="w-full flex items-center gap-1.5 text-left text-amber-100 font-semibold cursor-pointer hover:text-amber-300 transition truncate"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          openReminderLogDatePicker(log.id, log.note || log.subject);
+                                                        }}
+                                                        title="Kliknite pre výber dátumu"
+                                                      >
+                                                        <CalendarDays className="h-3 w-3 shrink-0 text-amber-300" />
+                                                        <span className="truncate">
+                                                          {reminderLogDateValue ? formatReminderDate(reminderLogDateValue) : ""}
+                                                        </span>
+                                                      </button>
+                                                      {openReminderCalendarLogId === log.id && (
+                                                        <ReminderDatePicker
+                                                          value={editingReminderDateValue}
+                                                          onChange={(dateValue) => {
+                                                            setEditingReminderDateValue(dateValue);
+                                                            handleSaveReminderLog(log.id, c.id, dateValue, activeReminderNoteText);
+                                                          }}
+                                                        />
+                                                      )}
+                                                    </div>
+                                                    <input
+                                                      type="text"
+                                                      value={editingReminderLogId === log.id ? editingLogText : reminderLogNoteText}
+                                                      placeholder="Poznámka..."
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (editingReminderLogId !== log.id) {
+                                                          openReminderLogNoteEditor(log.id, log.note || log.subject);
+                                                        }
+                                                      }}
+                                                      onChange={(e) => {
+                                                        setEditingLogText(e.target.value);
+                                                        if (editingReminderLogId !== log.id) {
+                                                          setEditingReminderLogId(log.id);
+                                                          setOpenReminderCalendarLogId(null);
+                                                          setEditingReminderDateValue(reminderLogDateValue || getTomorrowDateValue());
+                                                        }
+                                                      }}
+                                                      onKeyDown={(e) => {
+                                                        if (e.key === "Enter") handleSaveReminderLog(log.id, c.id, editingReminderDateValue, parseReminderNoteText(editingLogText));
+                                                        if (e.key === "Escape") setEditingReminderLogId(null);
+                                                      }}
+                                                      onBlur={() => {
+                                                        if (editingReminderLogId === log.id) handleSaveReminderLog(log.id, c.id, editingReminderDateValue, parseReminderNoteText(editingLogText));
+                                                      }}
+                                                      className="w-full bg-transparent border-0 px-1 py-0 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:text-amber-100"
+                                                    />
+                                                  </div>
+                                                ) : editingLogId === log.id ? (
                                                   <input
                                                     type="text"
                                                     value={editingLogText}
@@ -2870,17 +3193,23 @@ export default function Dashboard() {
                                                       if (e.key === "Escape") setEditingLogId(null);
                                                     }}
                                                     onBlur={() => handleSaveCrmLogNote(log.id, c.id, editingLogText)}
-                                                    className="bg-slate-950 border border-white/10 rounded px-1.5 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-full"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="w-full bg-slate-950 border border-white/10 rounded px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
                                                     autoFocus
                                                   />
                                                 ) : (
-                                                  <span
-                                                    className="text-slate-200 font-medium cursor-pointer hover:text-indigo-300 transition"
-                                                    onClick={() => { setEditingLogId(log.id); setEditingLogText(log.note || log.subject || ""); }}
+                                                  <button
+                                                    type="button"
+                                                    className="w-full text-left text-slate-100 font-medium cursor-text hover:text-indigo-300 transition truncate"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setEditingLogId(log.id);
+                                                      setEditingLogText(visibleLogNote);
+                                                    }}
                                                     title="Kliknite pre úpravu"
                                                   >
-                                                    {log.note || log.subject}
-                                                  </span>
+                                                    {visibleLogNote || "Kliknite a napíšte poznámku"}
+                                                  </button>
                                                 )}
                                               </div>
                                             </div>
@@ -2900,13 +3229,60 @@ export default function Dashboard() {
                               </td>
 
                               {/* Actions */}
-                              <td className="py-1.5 px-3 text-right">
-                                {isInlineEditing ? (
-                                  <div className="flex flex-col gap-2 items-end justify-end">
-                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                      {inlineLogType === "call" ? "Záznam hovoru" : "Záznam e-mailu"}
+                              <td className="py-1 px-3 text-right">
+                                {isReminderDatePicking ? (
+                                  <div className="flex justify-end min-w-[430px]">
+                                    <div className="flex gap-1.5 items-center w-full">
+                                      <div className="relative w-32 shrink-0">
+                                        <button
+                                          type="button"
+                                          className="w-full flex items-center gap-1.5 bg-slate-950 border border-amber-400/40 rounded px-2 py-1 text-xs text-amber-100 text-left hover:border-amber-300 focus:outline-none"
+                                        >
+                                          <CalendarDays className="h-3 w-3 text-amber-300 shrink-0" />
+                                          <span>{reminderDateValue ? formatReminderDate(reminderDateValue) : "Dátum"}</span>
+                                        </button>
+                                        <ReminderDatePicker
+                                          value={reminderDateValue}
+                                          onChange={(dateValue) => setReminderDateValue(dateValue)}
+                                        />
+                                      </div>
+                                      <input
+                                        type="text"
+                                        value={reminderNoteValue}
+                                        onChange={(e) => setReminderNoteValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") handleSaveReminderDate(c.id);
+                                          if (e.key === "Escape") {
+                                            setReminderDateCompanyId(null);
+                                            setReminderDateValue("");
+                                            setReminderNoteValue("");
+                                          }
+                                        }}
+                                        placeholder="Poznámka..."
+                                        className="bg-slate-950 border border-white/10 rounded px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-amber-400 w-full"
+                                        autoFocus
+                                      />
+                                      <button
+                                        onClick={() => handleSaveReminderDate(c.id)}
+                                        className="px-2.5 py-1 rounded bg-amber-500 text-slate-950 font-bold text-xs hover:bg-amber-400 transition cursor-pointer"
+                                      >
+                                        Uložiť
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setReminderDateCompanyId(null);
+                                          setReminderDateValue("");
+                                          setReminderNoteValue("");
+                                        }}
+                                        className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-rose-400"
+                                      >
+                                        Zrušiť
+                                      </button>
                                     </div>
-                                    <div className="flex gap-1.5 items-center">
+                                  </div>
+                                ) : isInlineEditing ? (
+                                  <div className="flex justify-end min-w-[420px]">
+                                    <div className="flex gap-1.5 items-center w-full">
                                       <input
                                         type="text"
                                         placeholder="Zápis z hovoru / e-mailu..."
@@ -2916,7 +3292,7 @@ export default function Dashboard() {
                                           if (e.key === "Enter") handleSaveInlineLog(c.id);
                                           if (e.key === "Escape") setInlineLogCompanyId(null);
                                         }}
-                                        className="bg-slate-950 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 w-48"
+                                        className="bg-slate-950 border border-white/10 rounded px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-emerald-500 w-full"
                                         autoFocus
                                       />
                                       <button
@@ -2955,10 +3331,11 @@ export default function Dashboard() {
                                       <div className="absolute bottom-full right-0 pb-1 hidden group-hover/phone:flex flex-col gap-0.5 z-50">
                                         <button
                                           onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "interest"); }}
-                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-600/90 hover:bg-emerald-500 text-white text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
-                                          title="Nový záujem – poslať mail"
+                                          className="flex items-center justify-center px-2.5 py-1 rounded-md bg-emerald-600/90 hover:bg-emerald-500 text-white whitespace-nowrap transition cursor-pointer shadow-lg"
+                                          title="Záujem"
+                                          aria-label="Záujem"
                                         >
-                                          <span>✉️</span> Nový záujem
+                                          <CheckCircle2 className="h-3 w-3" />
                                         </button>
                                         <button
                                           onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "noanswer"); }}
@@ -2968,11 +3345,18 @@ export default function Dashboard() {
                                           <span>📵</span> Nezdvihol
                                         </button>
                                         <button
-                                          onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "remind"); }}
-                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/90 hover:bg-amber-400 text-white text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
-                                          title="Zavolať znova"
+                                          onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "decline"); }}
+                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-600/90 hover:bg-rose-500 text-white text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
+                                          title="Odmietol"
                                         >
-                                          <span>🔔</span> Zavolať znova
+                                          <span>❌</span> Odmietol
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); openReminderDatePicker(c.id); }}
+                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/90 hover:bg-amber-400 text-white text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
+                                          title="Pripomenúť ďalší deň"
+                                        >
+                                          <span>🔔</span> Pripomenúť ďalší deň
                                         </button>
                                       </div>
                                     </div>

@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "daemon": "tsx src/scripts/daemon.ts",
     "lint": "eslint"
   },
   "dependencies": {

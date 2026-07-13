@@ -3,6 +3,17 @@ import { db } from "@/lib/db";
 import { communications } from "@/lib/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 
+const isCrmOutcomeSubject = (value: string | null | undefined) => {
+  const text = (value || "").toLowerCase();
+  return (
+    text.startsWith("[crm:") ||
+    text.includes("zavolať znova") ||
+    text.includes("pripomenúť ďalší deň") ||
+    text.includes("nezdvihol") ||
+    text.includes("nový záujem")
+  );
+};
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -15,7 +26,7 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { channel, occurredAt, note } = body;
+    const { channel, occurredAt, note, outcome } = body;
 
     if (!channel || (channel !== "call" && channel !== "email" && channel !== "view")) {
       return NextResponse.json({ error: "Invalid channel (must be call, email, or view)" }, { status: 400 });
@@ -28,7 +39,7 @@ export async function POST(
         channel,
         direction: "out",
         occurredAt: occurredAt || Date.now(),
-        subject: note || `${channel === "call" ? "Call" : channel === "email" ? "Email" : "CRM Tracker"} log`,
+        subject: outcome ? `[CRM:${outcome}]` : note || `${channel === "call" ? "Call" : channel === "email" ? "Email" : "CRM Tracker"} log`,
         bodyText: note || "",
         source: "manual",
       })
@@ -117,9 +128,17 @@ export async function PATCH(
       return NextResponse.json({ error: "Missing commId or note" }, { status: 400 });
     }
 
+    const existing = await db
+      .select({ subject: communications.subject })
+      .from(communications)
+      .where(and(eq(communications.id, commId), eq(communications.companyId, companyId)))
+      .limit(1);
+
+    const keepSubject = isCrmOutcomeSubject(existing[0]?.subject);
+
     await db
       .update(communications)
-      .set({ bodyText: note, subject: note })
+      .set(keepSubject ? { bodyText: note } : { bodyText: note, subject: note })
       .where(and(eq(communications.id, commId), eq(communications.companyId, companyId)));
 
     return NextResponse.json({ success: true });

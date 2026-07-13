@@ -3,6 +3,22 @@ import { db } from "@/lib/db";
 import { companies, websiteSnapshots, communications } from "@/lib/db/schema";
 import { eq, like, or, and, desc, asc, sql, not, isNull, getTableColumns } from "drizzle-orm";
 
+// Legal-form / noise tokens to drop so "BUPRO s.r.o." matches "BUPRO".
+const FTS_STOPWORDS = new Set(["sro", "spol", "ks", "sr", "as", "co", "the"]);
+
+// Turn a user's search string into an FTS5 MATCH expression: split on anything
+// that isn't a letter/number (so "s.r.o." falls apart), drop 1-char + legal-form
+// tokens, then prefix-match each remaining token (quoted to neutralise FTS
+// operators). Returns null when nothing usable remains (e.g. a bare "s.r.o.").
+function buildFtsMatch(raw: string): string | null {
+  const tokens = raw
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length > 1 && !FTS_STOPWORDS.has(t));
+  if (tokens.length === 0) return null;
+  return tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(" ");
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const page = parseInt(searchParams.get("page") || "1", 10);
@@ -24,13 +40,16 @@ export async function GET(request: NextRequest) {
   const filters: any[] = [];
 
   if (search) {
-    filters.push(
-      or(
-        like(companies.name, `%${search}%`),
-        like(companies.domain, `%${search}%`),
-        like(companies.website, `%${search}%`)
-      )
-    );
+    const match = buildFtsMatch(search);
+    if (match) {
+      // Fast, indexed, punctuation/diacritics-insensitive search via FTS5.
+      filters.push(
+        sql`${companies.id} IN (SELECT rowid FROM companies_fts WHERE companies_fts MATCH ${match})`
+      );
+    } else {
+      // Query was only stopwords/short tokens — cheap prefix fallback.
+      filters.push(like(companies.name, `${search}%`));
+    }
   }
 
   if (city) {
