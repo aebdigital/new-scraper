@@ -362,7 +362,7 @@ export default function Dashboard() {
   const [city, setCity] = useState("");
   const [status, setStatus] = useState("");
   const [tag, setTag] = useState("");
-  const [sortBy, setSortBy] = useState("score_desc");
+  const [sortBy, setSortBy] = useState("revenue_desc");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
@@ -842,60 +842,7 @@ export default function Dashboard() {
         </button>
       </nav>
 
-      {/* Metrics Grid */}
-      {activeTab === "companies" && (
-        <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="glass-panel p-5 rounded-2xl flex flex-col">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Targets</span>
-            <span className="text-3xl font-bold text-white mt-1">
-              {statsLoading ? "..." : stats?.total.toLocaleString() ?? "0"}
-            </span>
-            <div className="flex items-center justify-between text-xs text-slate-400 mt-3 border-t border-white/5 pt-2">
-              <span>Imported Excel Data</span>
-              <span className="text-indigo-400">100%</span>
-            </div>
-          </div>
 
-          <div className="glass-panel p-5 rounded-2xl flex flex-col">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Crawled</span>
-            <span className="text-3xl font-bold text-white mt-1">
-              {statsLoading ? "..." : stats?.crawled.toLocaleString() ?? "0"}
-            </span>
-            <div className="flex items-center justify-between text-xs text-slate-400 mt-3 border-t border-white/5 pt-2">
-              <span>Pending: {stats?.pending}</span>
-              <span className="text-emerald-400">
-                {stats ? ((stats.crawled / stats.total) * 100).toFixed(1) : "0"}%
-              </span>
-            </div>
-          </div>
-
-          <div className="glass-panel p-5 rounded-2xl flex flex-col glow-hot border-rose-500/25">
-            <span className="text-xs font-medium text-rose-400 uppercase tracking-wider">Hot Leads</span>
-            <span className="text-3xl font-bold text-rose-300 mt-1">
-              {statsLoading ? "..." : stats?.scoring.hot.toLocaleString() ?? "0"}
-            </span>
-            <div className="flex items-center justify-between text-xs text-rose-400/70 mt-3 border-t border-rose-500/10 pt-2">
-              <span>Score ≥ 60 (Critical Needs)</span>
-              <span>
-                {stats && stats.crawled > 0 ? ((stats.scoring.hot / stats.crawled) * 100).toFixed(1) : "0"}%
-              </span>
-            </div>
-          </div>
-
-          <div className="glass-panel p-5 rounded-2xl flex flex-col">
-            <span className="text-xs font-medium text-amber-400 uppercase tracking-wider">Warm Opportunities</span>
-            <span className="text-3xl font-bold text-amber-300 mt-1">
-              {statsLoading ? "..." : stats?.scoring.warm.toLocaleString() ?? "0"}
-            </span>
-            <div className="flex items-center justify-between text-xs text-amber-400/70 mt-3 border-t border-white/5 pt-2">
-              <span>Score 35 - 59 (Weak Design)</span>
-              <span>
-                {stats && stats.crawled > 0 ? ((stats.scoring.warm / stats.crawled) * 100).toFixed(1) : "0"}%
-              </span>
-            </div>
-          </div>
-        </section>
-      )}
 
       {/* Main CRM Workspace */}
       <main className="flex-1 flex flex-col gap-6 relative">
