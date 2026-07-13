@@ -10,7 +10,7 @@ export const companies = sqliteTable("companies", {
   name: text("name").notNull(),
   city: text("city"),
   website: text("website"),
-  domain: text("domain").unique(), // Cleaned & normalized unique domain
+  domain: text("domain"), // Cleaned & normalized unique domain
   phone: text("phone"),
   address: text("address"),
   emailsFound: text("emails_found"), // Original emails from Excel
@@ -46,6 +46,7 @@ export const companies = sqliteTable("companies", {
   nameIdx: index("idx_companies_name").on(table.name),
   cityIdx: index("idx_companies_city").on(table.city),
   legalFormIdx: index("idx_companies_legal_form").on(table.legalFormCode),
+  domainIdx: index("idx_companies_domain").on(table.domain),
 }));
 
 // Website Snapshots Table (Historical records)
@@ -108,6 +109,7 @@ export const communications = sqliteTable("communications", {
   companyIdIdx: index("idx_comm_company").on(table.companyId),
   counterpartyDomainIdx: index("idx_comm_domain").on(table.counterpartyDomain),
   occurredAtIdx: index("idx_comm_occurred").on(table.occurredAt),
+  crmIdx: index("idx_comms_crm").on(table.source, table.occurredAt),
 }));
 
 // Rivals Table — Web design agencies that build client websites

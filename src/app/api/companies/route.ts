@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
     const data = await db
       .select({
         ...getTableColumns(companies),
-        commCount: sql<number>`(SELECT COUNT(*) FROM communications m WHERE m.company_id = ${companies.id})`,
+        commCount: sql<number>`(SELECT COUNT(*) FROM communications WHERE company_id = companies.id)`,
       })
       .from(companies)
       .where(whereClause)

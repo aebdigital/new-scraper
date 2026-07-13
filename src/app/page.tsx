@@ -46,7 +46,8 @@ import {
   HeartPulse,
   Palette,
   Wrench,
-  Pencil
+  Pencil,
+  Trash2
 } from "lucide-react";
 
 interface Company {
@@ -573,7 +574,7 @@ export default function Dashboard() {
   const [naceSection, setNaceSection] = useState("");
   const [naceDivision, setNaceDivision] = useState("");
   const [naceSubdivision, setNaceSubdivision] = useState("");
-  const [legalForm, setLegalForm] = useState("");
+  const [legalForm, setLegalForm] = useState("sro");
   const [dynamicSubdivisions, setDynamicSubdivisions] = useState<string[]>([]);
   const [subdivisionsLoading, setSubdivisionsLoading] = useState(false);
 
@@ -616,6 +617,10 @@ export default function Dashboard() {
   const [inlineLogCompanyId, setInlineLogCompanyId] = useState<number | null>(null);
   const [inlineLogType, setInlineLogType] = useState<"call" | "email" | null>(null);
   const [inlineLogNote, setInlineLogNote] = useState("");
+
+  // CRM log note editing
+  const [editingLogId, setEditingLogId] = useState<number | null>(null);
+  const [editingLogText, setEditingLogText] = useState("");
 
   // CRM call/email logging states
   const [callNote, setCallNote] = useState("");
@@ -711,6 +716,7 @@ export default function Dashboard() {
       const data = await res.json();
       if (data.error) {
         console.error("Failed to save website:", data.error);
+        alert(data.error);
         fetchCompanies();
       }
     } catch (err) {
@@ -719,10 +725,9 @@ export default function Dashboard() {
     }
   };
 
-  // Fetch companies paginated & filtered
-  const fetchCompanies = async () => {
+  const fetchCompanies = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const params = new URLSearchParams({
         page: page.toString(),
         limit: "200",
@@ -747,7 +752,7 @@ export default function Dashboard() {
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -1029,10 +1034,9 @@ export default function Dashboard() {
     }
   };
 
-  // Fetch CRM logs
-  const fetchCRM = async () => {
+  const fetchCRM = async (silent = false) => {
     try {
-      setCrmLoading(true);
+      if (!silent) setCrmLoading(true);
       const res = await fetch("/api/crm");
       const data = await res.json();
       if (!data.error) {
@@ -1041,7 +1045,7 @@ export default function Dashboard() {
     } catch (e) {
       console.error("Error fetching CRM logs:", e);
     } finally {
-      setCrmLoading(false);
+      if (!silent) setCrmLoading(false);
     }
   };
 
@@ -1060,7 +1064,14 @@ export default function Dashboard() {
       const data = await res.json();
       if (!data.error && data.communication) {
         setDetailComms((prev) => [data.communication, ...prev]);
-        fetchCRM();
+        setCompanies((prev) =>
+          prev.map((c) =>
+            c.id === companyId
+              ? { ...c, commCount: (c.commCount ?? 0) + 1 }
+              : c
+          )
+        );
+        fetchCRM(true);
       }
     } catch (e) {
       console.error("Error adding to CRM:", e);
@@ -1086,11 +1097,100 @@ export default function Dashboard() {
         setInlineLogCompanyId(null);
         setInlineLogType(null);
         setInlineLogNote("");
-        fetchCRM();
-        fetchCompanies();
+        fetchCRM(true);
+        fetchCompanies(true);
       }
     } catch (e) {
       console.error("Error saving inline CRM log:", e);
+    }
+  };
+
+  // Quick call outcome log (no typing needed)
+  const handleQuickCallLog = async (companyId: number, outcome: "remind" | "noanswer" | "interest") => {
+    const noteMap = {
+      remind: "[REMIND] Zavolať znova",
+      noanswer: "[NOANSWER] Nezdvihol",
+      interest: "[INTEREST] Nový záujem – poslať mail",
+    };
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: outcome === "interest" ? "email" : "call",
+          occurredAt: Date.now(),
+          note: noteMap[outcome],
+        }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        fetchCRM(true);
+        fetchCompanies(true);
+      }
+    } catch (e) {
+      console.error("Error saving quick call log:", e);
+    }
+  };
+
+  const handleSaveCrmLogNote = async (commId: number, companyId: number, newNote: string) => {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commId, note: newNote }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setEditingLogId(null);
+        fetchCRM(true);
+      }
+    } catch (e) {
+      console.error("Error updating CRM log note:", e);
+    }
+  };
+
+  const handleRemoveCompanyFromCRM = async (companyId: number, dateStr: string) => {
+    if (!confirm("Naozaj chcete odstrániť túto firmu a všetky jej aktivity z dnešného plánu CRM?")) return;
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications?allForDate=${dateStr}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!data.error) {
+        fetchCRM(true);
+        fetchCompanies(true);
+      } else {
+        alert(data.error);
+      }
+    } catch (e) {
+      console.error("Error removing from CRM:", e);
+    }
+  };
+
+  const handleDeleteCrmLog = async (commId: number, companyId: number) => {
+    if (!confirm("Naozaj chcete vymazať tento záznam aktivity?")) return;
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications?commId=${commId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!data.error) {
+        fetchCRM(true);
+        if (detailCompany && detailCompany.id === companyId) {
+          setDetailComms((prev) => prev.filter((item) => item.id !== commId));
+        }
+        setCompanies((prev) =>
+          prev.map((c) =>
+            c.id === companyId
+              ? { ...c, commCount: Math.max(0, (c.commCount ?? 0) - 1) }
+              : c
+          )
+        );
+      } else {
+        alert(data.error);
+      }
+    } catch (e) {
+      console.error("Error deleting CRM log:", e);
     }
   };
 
@@ -2677,13 +2777,33 @@ export default function Dashboard() {
                       <tbody>
                         {Object.values(day.companies).map((c) => {
                           const isInlineEditing = inlineLogCompanyId === c.id;
+
+                          // Determine row color from last call outcome tag
+                          const lastOutcome = (() => {
+                            for (let i = c.logs.length - 1; i >= 0; i--) {
+                              const n = c.logs[i].note || "";
+                              if (n.startsWith("[REMIND]")) return "remind";
+                              if (n.startsWith("[NOANSWER]")) return "noanswer";
+                              if (n.startsWith("[INTEREST]")) return "interest";
+                            }
+                            return null;
+                          })();
+
+                          const rowBg = lastOutcome === "remind"
+                            ? "bg-amber-500/8 border-l-2 border-l-amber-400"
+                            : lastOutcome === "noanswer"
+                            ? "bg-slate-500/8 border-l-2 border-l-slate-500"
+                            : lastOutcome === "interest"
+                            ? "bg-emerald-500/8 border-l-2 border-l-emerald-400"
+                            : "";
+
                           return (
                             <tr
                               key={c.id}
-                              className="border-b border-white/5 hover:bg-white/2 transition group"
+                              className={`border-b border-white/5 hover:bg-white/3 transition group ${rowBg}`}
                             >
                               {/* Company Name */}
-                              <td className="py-3 px-4 font-semibold text-slate-100">
+                              <td className="py-1.5 px-4 font-semibold text-slate-100">
                                 <button
                                   onClick={() => setSelectedCompanyId(c.id)}
                                   className="hover:text-indigo-400 hover:underline cursor-pointer transition text-left"
@@ -2693,7 +2813,7 @@ export default function Dashboard() {
                               </td>
 
                               {/* Website */}
-                              <td className="py-3 px-3">
+                              <td className="py-1.5 px-3">
                                 {c.domain ? (
                                   <a
                                     href={c.website || `https://${c.domain}`}
@@ -2710,39 +2830,77 @@ export default function Dashboard() {
                               </td>
 
                               {/* Activity Logs List */}
-                              <td className="py-3 px-3">
+                              <td className="py-1.5 px-3">
                                 <div className="flex flex-col gap-1.5">
-                                  {c.logs.map((log: any) => {
-                                    const logTime = new Date(log.occurredAt).toLocaleTimeString("sk-SK", {
-                                      hour: "2-digit",
-                                      minute: "2-digit"
-                                    });
+                                  {(() => {
+                                    const manualLogs = c.logs.filter((log: any) => log.channel !== "view");
 
-                                    return (
-                                      <div key={log.id} className="text-xs flex items-start gap-2 bg-white/2 border border-white/5 rounded-lg p-2 max-w-xl">
-                                        <span className="text-[10px] shrink-0 text-slate-500 font-semibold mt-0.5">{logTime}</span>
-                                        <div className="flex items-start gap-1">
-                                          {log.channel === "call" ? (
-                                            <span className="text-indigo-400 shrink-0 font-bold">📞</span>
-                                          ) : log.channel === "email" ? (
-                                            <span className="text-sky-400 shrink-0 font-bold">✉️</span>
-                                          ) : (
-                                            <span className="text-slate-500 shrink-0 font-bold">✓</span>
-                                          )}
-                                          <div className="flex flex-col">
-                                            <span className="text-slate-200 font-medium">
-                                              {log.channel === "view" ? "Pridané do denného plánu" : log.note || log.subject}
-                                            </span>
+                                    if (manualLogs.length === 0) {
+                                      return (
+                                        <span className="text-[11px] text-slate-600 italic select-none">
+                                          Pridané do plánu (zatiaľ bez hovoru/e-mailu)
+                                        </span>
+                                      );
+                                    }
+
+                                    return manualLogs.map((log: any) => {
+                                      const logTime = new Date(log.occurredAt).toLocaleTimeString("sk-SK", {
+                                        hour: "2-digit",
+                                        minute: "2-digit"
+                                      });
+
+                                      return (
+                                        <div key={log.id} className="text-xs flex items-center justify-between gap-3 bg-white/2 border border-white/5 rounded-lg p-2 max-w-xl group/log">
+                                          <div className="flex items-start gap-2">
+                                            <span className="text-[10px] shrink-0 text-slate-500 font-semibold mt-0.5">{logTime}</span>
+                                            <div className="flex items-start gap-1">
+                                              {log.channel === "call" ? (
+                                                <span className="text-indigo-400 shrink-0 font-bold">📞</span>
+                                              ) : (
+                                                <span className="text-sky-400 shrink-0 font-bold">✉️</span>
+                                              )}
+                                              <div className="flex flex-col flex-1">
+                                                {editingLogId === log.id ? (
+                                                  <input
+                                                    type="text"
+                                                    value={editingLogText}
+                                                    onChange={(e) => setEditingLogText(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === "Enter") handleSaveCrmLogNote(log.id, c.id, editingLogText);
+                                                      if (e.key === "Escape") setEditingLogId(null);
+                                                    }}
+                                                    onBlur={() => handleSaveCrmLogNote(log.id, c.id, editingLogText)}
+                                                    className="bg-slate-950 border border-white/10 rounded px-1.5 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-full"
+                                                    autoFocus
+                                                  />
+                                                ) : (
+                                                  <span
+                                                    className="text-slate-200 font-medium cursor-pointer hover:text-indigo-300 transition"
+                                                    onClick={() => { setEditingLogId(log.id); setEditingLogText(log.note || log.subject || ""); }}
+                                                    title="Kliknite pre úpravu"
+                                                  >
+                                                    {log.note || log.subject}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
                                           </div>
+                                          <button
+                                            onClick={() => handleDeleteCrmLog(log.id, c.id)}
+                                            className="opacity-0 group-hover/log:opacity-100 transition p-0.5 text-slate-500 hover:text-rose-400 flex-shrink-0 cursor-pointer"
+                                            title="Vymazať záznam"
+                                          >
+                                            <Trash2 className="h-3 w-3" />
+                                          </button>
                                         </div>
-                                      </div>
-                                    );
-                                  })}
+                                      );
+                                    });
+                                  })()}
                                 </div>
                               </td>
 
                               {/* Actions */}
-                              <td className="py-3 px-4 text-right">
+                              <td className="py-1.5 px-3 text-right">
                                 {isInlineEditing ? (
                                   <div className="flex flex-col gap-2 items-end justify-end">
                                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
@@ -2779,35 +2937,69 @@ export default function Dashboard() {
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="flex items-center justify-end gap-2">
-                                    <button
-                                      onClick={() => {
-                                        setInlineLogCompanyId(c.id);
-                                        setInlineLogType("call");
-                                        setInlineLogNote("");
-                                      }}
-                                      className="p-2 rounded-lg border border-white/10 hover:bg-white/5 text-indigo-400 hover:text-indigo-300 transition cursor-pointer"
-                                      title="Pridať hovor"
-                                    >
-                                      <Phone className="h-4 w-4" />
-                                    </button>
+                                  <div className="flex items-center justify-end gap-1">
+                                    {/* Phone with hover popup */}
+                                    <div className="relative group/phone">
+                                      <button
+                                        onClick={() => {
+                                          setInlineLogCompanyId(c.id);
+                                          setInlineLogType("call");
+                                          setInlineLogNote("");
+                                        }}
+                                        className="p-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-indigo-400 hover:text-indigo-300 transition cursor-pointer"
+                                        title="Pridať hovor"
+                                      >
+                                        <Phone className="h-4 w-4" />
+                                      </button>
+                                      {/* Quick outcome popup */}
+                                      <div className="absolute bottom-full right-0 pb-1 hidden group-hover/phone:flex flex-col gap-0.5 z-50">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "interest"); }}
+                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-600/90 hover:bg-emerald-500 text-white text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
+                                          title="Nový záujem – poslať mail"
+                                        >
+                                          <span>✉️</span> Nový záujem
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "noanswer"); }}
+                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-600/90 hover:bg-slate-500 text-white text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
+                                          title="Nezdvihol"
+                                        >
+                                          <span>📵</span> Nezdvihol
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "remind"); }}
+                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/90 hover:bg-amber-400 text-white text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
+                                          title="Zavolať znova"
+                                        >
+                                          <span>🔔</span> Zavolať znova
+                                        </button>
+                                      </div>
+                                    </div>
                                     <button
                                       onClick={() => {
                                         setInlineLogCompanyId(c.id);
                                         setInlineLogType("email");
                                         setInlineLogNote("");
                                       }}
-                                      className="p-2 rounded-lg border border-white/10 hover:bg-white/5 text-sky-400 hover:text-sky-300 transition cursor-pointer"
+                                      className="p-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-sky-400 hover:text-sky-300 transition cursor-pointer"
                                       title="Pridať e-mail"
                                     >
                                       <Mail className="h-4 w-4" />
                                     </button>
                                     <button
                                       onClick={() => setSelectedCompanyId(c.id)}
-                                      className="p-2 rounded-lg border border-white/10 hover:bg-white/5 text-slate-400 hover:text-white transition cursor-pointer"
+                                      className="p-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-400 hover:text-white transition cursor-pointer"
                                       title="Otvoriť detail"
                                     >
                                       <Building className="h-4 w-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleRemoveCompanyFromCRM(c.id, day.dateStr)}
+                                      className="p-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-slate-400 hover:text-rose-400 transition cursor-pointer"
+                                      title="Odstrániť z CRM"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
                                     </button>
                                   </div>
                                 )}
