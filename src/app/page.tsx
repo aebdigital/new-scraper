@@ -366,6 +366,7 @@ export default function Dashboard() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [jumpPageInput, setJumpPageInput] = useState("1");
 
   // NACE & Legal Form filters state
   const [naceSection, setNaceSection] = useState("");
@@ -402,6 +403,13 @@ export default function Dashboard() {
   const [expandedComm, setExpandedComm] = useState<number | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // CRM call/email logging states
+  const [callNote, setCallNote] = useState("");
+  const [callDate, setCallDate] = useState("");
+  const [emailNote, setEmailNote] = useState("");
+  const [emailDate, setEmailDate] = useState("");
+  const [isSavingLog, setIsSavingLog] = useState(false);
+
   // Crawling action state
   const [isCrawlingBatch, setIsCrawlingBatch] = useState(false);
   const [crawlProgressMessage, setCrawlProgressMessage] = useState("");
@@ -415,6 +423,7 @@ export default function Dashboard() {
   const [rivalsPage, setRivalsPage] = useState(1);
   const [rivalsTotalPages, setRivalsTotalPages] = useState(1);
   const [rivalsTotalCount, setRivalsTotalCount] = useState(0);
+  const [jumpRivalsPageInput, setJumpRivalsPageInput] = useState("1");
   const [selectedRivalId, setSelectedRivalId] = useState<number | null>(null);
   const [rivalDetail, setRivalDetail] = useState<Rival | null>(null);
   const [rivalClients, setRivalClients] = useState<RivalClient[]>([]);
@@ -498,6 +507,27 @@ export default function Dashboard() {
 
     fetchDetails();
   }, [selectedCompanyId]);
+
+  useEffect(() => {
+    if (detailCompany) {
+      setCallNote(detailCompany.lastCalledNote || "");
+      setCallDate(
+        detailCompany.lastCalledAt
+          ? new Date(detailCompany.lastCalledAt - new Date().getTimezoneOffset() * 60 * 1000)
+              .toISOString()
+              .slice(0, 16)
+          : ""
+      );
+      setEmailNote(detailCompany.lastEmailedNote || "");
+      setEmailDate(
+        detailCompany.lastEmailedAt
+          ? new Date(detailCompany.lastEmailedAt - new Date().getTimezoneOffset() * 60 * 1000)
+              .toISOString()
+              .slice(0, 16)
+          : ""
+      );
+    }
+  }, [detailCompany]);
 
   // Fetch rivals
   const fetchRivals = async () => {
@@ -591,6 +621,14 @@ export default function Dashboard() {
     }
   }, [activeTab, rivalsPage, rivalsSearch, rivalsSortBy]);
 
+  useEffect(() => {
+    setJumpPageInput(page.toString());
+  }, [page]);
+
+  useEffect(() => {
+    setJumpRivalsPageInput(rivalsPage.toString());
+  }, [rivalsPage]);
+
   // Trigger manual crawl
   const handleSingleCrawl = async (id: number) => {
     try {
@@ -613,6 +651,59 @@ export default function Dashboard() {
       console.error(e);
     } finally {
       setIsCrawlingSingle(false);
+    }
+  };
+
+  // Save CRM logs (Call / Email notes & timestamps)
+  const handleSaveLogs = async () => {
+    if (!detailCompany) return;
+    try {
+      setIsSavingLog(true);
+      const calledAt = callDate ? new Date(callDate).getTime() : null;
+      const emailedAt = emailDate ? new Date(emailDate).getTime() : null;
+
+      const res = await fetch(`/api/companies/${detailCompany.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lastCalledAt: calledAt,
+          lastCalledNote: callNote,
+          lastEmailedAt: emailedAt,
+          lastEmailedNote: emailNote,
+        }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        // Refresh local details view
+        setDetailCompany((prev: any) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            lastCalledAt: calledAt,
+            lastCalledNote: callNote,
+            lastEmailedAt: emailedAt,
+            lastEmailedNote: emailNote,
+          };
+        });
+        // Also refresh the main companies list
+        setCompanies((prev) =>
+          prev.map((c) =>
+            c.id === detailCompany.id
+              ? {
+                  ...c,
+                  lastCalledAt: calledAt,
+                  lastCalledNote: callNote,
+                  lastEmailedAt: emailedAt,
+                  lastEmailedNote: emailNote,
+                }
+              : c
+          )
+        );
+      }
+    } catch (e) {
+      console.error("Error saving CRM logs:", e);
+    } finally {
+      setIsSavingLog(false);
     }
   };
 
@@ -1079,6 +1170,7 @@ export default function Dashboard() {
                 <thead>
                   <tr className="border-b border-white/5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 bg-white/2">
                     <th className="py-2 px-3">Company Name</th>
+                    <th className="py-2 px-3">Website</th>
                     <th className="py-2 px-3 text-right">Revenue</th>
                     <th className="py-2 px-3 text-right">Profit</th>
                     <th className="py-2 px-3">Contact Info</th>
@@ -1103,7 +1195,17 @@ export default function Dashboard() {
                     >
                       <td className="py-1.5 px-3">
                         <div className="font-semibold text-slate-100 flex items-center gap-2 flex-wrap">
-                          <span>{c.name}</span>
+                          <a
+                            href={`https://www.google.com/search?q=${encodeURIComponent(c.name + (c.city ? " " + c.city : ""))}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="hover:text-indigo-400 hover:underline cursor-pointer transition flex items-center gap-1 text-slate-100"
+                            title={`Search "${c.name}" on Google`}
+                          >
+                            <span>{c.name}</span>
+                            <Search className="h-3 w-3 text-slate-500 hover:text-indigo-400 inline" />
+                          </a>
                           {(c.commCount ?? 0) > 0 && (
                             <span
                               title={`${c.commCount} emails on record`}
@@ -1129,6 +1231,22 @@ export default function Dashboard() {
                             </span>
                           )}
                         </div>
+                      </td>
+                      <td className="py-1.5 px-3">
+                        {c.domain ? (
+                          <a
+                            href={c.website || `https://${c.domain}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-indigo-400 hover:text-indigo-300 hover:underline font-medium text-xs flex items-center gap-1 inline-flex"
+                          >
+                            <span>{c.domain}</span>
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
                       </td>
                       <td className="py-1.5 px-3 text-right text-slate-300 font-medium whitespace-nowrap">
                         {c.revenue !== null && c.revenue !== undefined ? (
@@ -1190,11 +1308,32 @@ export default function Dashboard() {
           </div>
 
           {/* Pagination Footer */}
-          <div className="p-4 border-t border-white/5 flex items-center justify-between">
-            <span className="text-xs text-slate-400">
-              Page <span className="font-medium text-slate-200">{page}</span> of{" "}
-              <span className="font-medium text-slate-200">{totalPages}</span>
-            </span>
+          <div className="p-4 border-t border-white/5 flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-4 text-xs text-slate-400">
+              <span>
+                Page <span className="font-medium text-slate-200">{page}</span> of{" "}
+                <span className="font-medium text-slate-200">{totalPages}</span>
+              </span>
+              <div className="flex items-center gap-1.5 border border-white/10 rounded-lg px-2 py-0.5 bg-white/2">
+                <span>Go to:</span>
+                <input
+                  type="text"
+                  value={jumpPageInput}
+                  onChange={(e) => setJumpPageInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const val = parseInt(jumpPageInput, 10);
+                      if (!isNaN(val) && val >= 1 && val <= totalPages) {
+                        setPage(val);
+                      } else {
+                        setJumpPageInput(page.toString());
+                      }
+                    }
+                  }}
+                  className="w-12 bg-transparent text-slate-100 font-semibold text-center focus:outline-none"
+                />
+              </div>
+            </div>
 
             <div className="flex gap-2">
               <button
@@ -1258,6 +1397,68 @@ export default function Dashboard() {
                     <MapPin className="h-3 w-3 flex-shrink-0" />
                     {detailCompany.address || detailCompany.city || "Slovakia"}
                   </p>
+                </div>
+
+                {/* CRM Call & Email Logs */}
+                <div className="bg-slate-950/40 border border-white/5 rounded-xl p-3.5 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Interaction History</h4>
+                    <button
+                      onClick={handleSaveLogs}
+                      disabled={isSavingLog}
+                      className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 transition flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                    >
+                      {isSavingLog ? (
+                        <RefreshCw className="h-3 w-3 animate-spin" />
+                      ) : (
+                        "Save Interaction"
+                      )}
+                    </button>
+                  </div>
+                  
+                  {/* Call Log Row */}
+                  <div className="flex flex-col gap-1.5 border-b border-white/5 pb-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                        <span>📞</span> Call Timestamp
+                      </span>
+                      <input
+                        type="datetime-local"
+                        value={callDate}
+                        onChange={(e) => setCallDate(e.target.value)}
+                        className="bg-slate-900 border border-white/10 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[155px]"
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      value={callNote}
+                      onChange={(e) => setCallNote(e.target.value)}
+                      placeholder="Add call notes..."
+                      className="bg-slate-900 border border-white/10 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-full"
+                    />
+                  </div>
+
+                  {/* Email Log Row */}
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                        <span>✉️</span> Mail Timestamp
+                      </span>
+                      <input
+                        type="datetime-local"
+                        value={emailDate}
+                        onChange={(e) => setEmailDate(e.target.value)}
+                        className="bg-slate-900 border border-white/10 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[155px]"
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      value={emailNote}
+                      onChange={(e) => setEmailNote(e.target.value)}
+                      placeholder="Add email notes..."
+                      className="bg-slate-900 border border-white/10 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-full"
+                    />
+                  </div>
                 </div>
 
               {/* Audit Score Breakdown */}
@@ -1707,12 +1908,33 @@ export default function Dashboard() {
             </div>
 
             {/* Pagination */}
-            <div className="p-4 border-t border-white/5 flex items-center justify-between">
-              <span className="text-xs text-slate-400">
-                Page <span className="font-medium text-slate-200">{rivalsPage}</span> of{" "}
-                <span className="font-medium text-slate-200">{rivalsTotalPages}</span>
-                <span className="ml-2">({rivalsTotalCount} agencies)</span>
-              </span>
+            <div className="p-4 border-t border-white/5 flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-4 text-xs text-slate-400">
+                <span>
+                  Page <span className="font-medium text-slate-200">{rivalsPage}</span> of{" "}
+                  <span className="font-medium text-slate-200">{rivalsTotalPages}</span>
+                  <span className="ml-2">({rivalsTotalCount} agencies)</span>
+                </span>
+                <div className="flex items-center gap-1.5 border border-white/10 rounded-lg px-2 py-0.5 bg-white/2">
+                  <span>Go to:</span>
+                  <input
+                    type="text"
+                    value={jumpRivalsPageInput}
+                    onChange={(e) => setJumpRivalsPageInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const val = parseInt(jumpRivalsPageInput, 10);
+                        if (!isNaN(val) && val >= 1 && val <= rivalsTotalPages) {
+                          setRivalsPage(val);
+                        } else {
+                          setJumpRivalsPageInput(rivalsPage.toString());
+                        }
+                      }
+                    }}
+                    className="w-12 bg-transparent text-slate-100 font-semibold text-center focus:outline-none"
+                  />
+                </div>
+              </div>
               <div className="flex gap-2">
                 <button
                   onClick={() => setRivalsPage((p) => Math.max(1, p - 1))}

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 import { relations } from "drizzle-orm";
 
 // Companies Table
@@ -32,8 +32,20 @@ export const companies = sqliteTable("companies", {
   contactSearched: integer("contact_searched").default(0).notNull(), // Track if contact extraction has run
   contactSearchedAt: integer("contact_searched_at"), // Timestamp (ms) when contact extraction last ran
   websiteAgencyId: integer("website_agency_id"), // FK to rivals table (who built their website)
+  lastCalledAt: integer("last_called_at"),
+  lastCalledNote: text("last_called_note"),
+  lastEmailedAt: integer("last_emailed_at"),
+  lastEmailedNote: text("last_emailed_note"),
   createdAt: integer("created_at").$defaultFn(() => Date.now()),
-});
+
+}, (table) => ({
+  leadScoreIdx: index("idx_companies_lead_score").on(table.leadScore),
+  statusScoreIdx: index("idx_companies_status_score").on(table.status, table.leadScore),
+  naceScoreIdx: index("idx_companies_nace_score").on(table.naceSection, table.leadScore),
+  revenueIdx: index("idx_companies_revenue").on(table.revenue),
+  nameIdx: index("idx_companies_name").on(table.name),
+  cityIdx: index("idx_companies_city").on(table.city),
+}));
 
 // Website Snapshots Table (Historical records)
 export const websiteSnapshots = sqliteTable("website_snapshots", {
@@ -55,7 +67,9 @@ export const websiteSnapshots = sqliteTable("website_snapshots", {
   cleanedTextContent: text("cleaned_text_content"),
   rawHtml: text("raw_html"),
   isFull: integer("is_full").default(0).notNull(),
-});
+}, (table) => ({
+  companyCrawledIdx: index("idx_snapshots_company_crawled").on(table.companyId, table.crawledAt),
+}));
 
 // Change Events Table (Triggered when changes are detected)
 export const changeEvents = sqliteTable("change_events", {
@@ -66,7 +80,9 @@ export const changeEvents = sqliteTable("change_events", {
   timestamp: integer("timestamp").notNull(),
   type: text("type").notNull(), // 'cms_changed', 'redesign', 'status_changed', 'new_email'
   description: text("description").notNull(),
-});
+}, (table) => ({
+  companyTimeIdx: index("idx_events_company_time").on(table.companyId, table.timestamp),
+}));
 
 // Communications Table — Past email/call history with companies (imported from Gmail Takeout mbox, carrier call logs, etc.)
 export const communications = sqliteTable("communications", {
@@ -87,7 +103,11 @@ export const communications = sqliteTable("communications", {
   messageId: text("message_id").unique(), // RFC Message-ID (or synthesized) — dedupe key for idempotent re-import
   source: text("source").notNull().default("gmail_mbox"), // Provenance: 'gmail_mbox' | 'carrier_calls' | ...
   createdAt: integer("created_at").$defaultFn(() => Date.now()),
-});
+}, (table) => ({
+  companyIdIdx: index("idx_comm_company").on(table.companyId),
+  counterpartyDomainIdx: index("idx_comm_domain").on(table.counterpartyDomain),
+  occurredAtIdx: index("idx_comm_occurred").on(table.occurredAt),
+}));
 
 // Rivals Table — Web design agencies that build client websites
 export const rivals = sqliteTable("rivals", {
