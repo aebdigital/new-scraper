@@ -73,6 +73,10 @@ interface Company {
   legalFormCode: string | null;
   commCount?: number;
   financialHistory?: string | null;
+  lastCalledAt?: number | null;
+  lastCalledNote?: string | null;
+  lastEmailedAt?: number | null;
+  lastEmailedNote?: string | null;
 }
 
 interface Stats {
@@ -546,7 +550,7 @@ function MiniLineChart({
 
 export default function Dashboard() {
   // Tab state
-  const [activeTab, setActiveTab] = useState<"companies" | "rivals">("companies");
+  const [activeTab, setActiveTab] = useState<"companies" | "rivals" | "crm">("companies");
 
   // Stats state
   const [stats, setStats] = useState<Stats | null>(null);
@@ -603,6 +607,15 @@ export default function Dashboard() {
   // Inline website editing state
   const [editingWebsiteCompanyId, setEditingWebsiteCompanyId] = useState<number | null>(null);
   const [editingWebsiteValue, setEditingWebsiteValue] = useState("");
+
+  // CRM daily logs state
+  const [crmLogs, setCrmLogs] = useState<any[]>([]);
+  const [crmLoading, setCrmLoading] = useState(false);
+
+  // CRM inline logging states
+  const [inlineLogCompanyId, setInlineLogCompanyId] = useState<number | null>(null);
+  const [inlineLogType, setInlineLogType] = useState<"call" | "email" | null>(null);
+  const [inlineLogNote, setInlineLogNote] = useState("");
 
   // CRM call/email logging states
   const [callNote, setCallNote] = useState("");
@@ -1016,6 +1029,78 @@ export default function Dashboard() {
     }
   };
 
+  // Fetch CRM logs
+  const fetchCRM = async () => {
+    try {
+      setCrmLoading(true);
+      const res = await fetch("/api/crm");
+      const data = await res.json();
+      if (!data.error) {
+        setCrmLogs(data.logs || []);
+      }
+    } catch (e) {
+      console.error("Error fetching CRM logs:", e);
+    } finally {
+      setCrmLoading(false);
+    }
+  };
+
+  // Add company manually to today's CRM log
+  const handleAddCompanyToCRM = async (companyId: number) => {
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: "view",
+          occurredAt: Date.now(),
+          note: "Added to CRM tracker",
+        }),
+      });
+      const data = await res.json();
+      if (!data.error && data.communication) {
+        setDetailComms((prev) => [data.communication, ...prev]);
+        fetchCRM();
+      }
+    } catch (e) {
+      console.error("Error adding to CRM:", e);
+    }
+  };
+
+  // Save inline logged call/email from CRM tab
+  const handleSaveInlineLog = async (companyId: number) => {
+    if (!inlineLogType) return;
+    const note = inlineLogNote.trim() || `${inlineLogType === "call" ? "Hovor" : "E-mail"} zaznamenaný`;
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: inlineLogType,
+          occurredAt: Date.now(),
+          note,
+        }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setInlineLogCompanyId(null);
+        setInlineLogType(null);
+        setInlineLogNote("");
+        fetchCRM();
+        fetchCompanies();
+      }
+    } catch (e) {
+      console.error("Error saving inline CRM log:", e);
+    }
+  };
+
+  // Fetch CRM logs when CRM tab becomes active
+  useEffect(() => {
+    if (activeTab === "crm") {
+      fetchCRM();
+    }
+  }, [activeTab]);
+
   const getScoreColor = (score: number) => {
     if (score >= 60) return "text-rose-400 bg-rose-500/10 border-rose-500/20";
     if (score >= 35) return "text-amber-400 bg-amber-500/10 border-amber-500/20";
@@ -1085,6 +1170,17 @@ export default function Dashboard() {
                   {rivalsTotalCount}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => { setActiveTab("crm"); setSelectedRivalId(null); setSelectedCompanyId(null); }}
+              className={`px-5 py-2 text-sm font-semibold rounded-lg transition flex items-center gap-2 cursor-pointer ${
+                activeTab === "crm"
+                  ? "bg-emerald-600 text-white shadow-lg shadow-emerald-600/20"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <Users className="h-4 w-4" />
+              CRM
             </button>
           </nav>
 
@@ -1435,6 +1531,12 @@ export default function Dashboard() {
                               NACE {c.nace}
                             </span>
                           )}
+                          {(c.commCount ?? 0) > 0 && (
+                            <span
+                              className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.9)] flex-shrink-0"
+                              title="Nedávna aktivita / Záznam v CRM"
+                            />
+                          )}
                           {c.finstatRank && (
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center gap-0.5 select-none flex-shrink-0">
                               🏆 #{c.finstatRank}
@@ -1660,6 +1762,34 @@ export default function Dashboard() {
                     <MapPin className="h-3 w-3 flex-shrink-0" />
                     {detailCompany.address || detailCompany.city || "Slovakia"}
                   </p>
+
+                  {/* Manual CRM Tracker trigger */}
+                  {(() => {
+                    const isCompanyInCRM = detailComms.some(m => {
+                      if (m.channel !== "view") return false;
+                      const logDate = new Date(m.occurredAt).toISOString().slice(0, 10);
+                      const todayStr = new Date().toISOString().slice(0, 10);
+                      return logDate === todayStr;
+                    });
+
+                    return (
+                      <div className="mt-3 flex items-center justify-between gap-2 border-t border-white/5 pt-3">
+                        <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">CRM Daily Log</span>
+                        <button
+                          onClick={() => handleAddCompanyToCRM(detailCompany.id)}
+                          disabled={isCompanyInCRM}
+                          className={`text-xs px-3 py-1.5 rounded-lg border font-semibold flex items-center gap-1.5 cursor-pointer transition ${
+                            isCompanyInCRM
+                              ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400 opacity-80 cursor-default"
+                              : "bg-slate-900 border-white/10 text-slate-300 hover:border-indigo-500 hover:text-white"
+                          }`}
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          {isCompanyInCRM ? "Added to Today" : "Add to CRM Today"}
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
 
               {/* Audit Score Breakdown */}
@@ -2434,6 +2564,265 @@ export default function Dashboard() {
             </section>
           )}
         </>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {/* CRM TAB */}
+      {/* ══════════════════════════════════════════════════════════════════ */}
+      {activeTab === "crm" && (
+        <div className="flex-1 flex flex-col gap-6">
+          {crmLoading ? (
+            <div className="flex-1 flex flex-col items-center justify-center py-20 text-slate-400 gap-2">
+              <RefreshCw className="h-6 w-6 animate-spin text-emerald-400" />
+              <span className="text-xs">Načítavam dennú aktivitu...</span>
+            </div>
+          ) : (() => {
+            // Group the logs by day
+            const groupedDays = (() => {
+              const groups: Record<string, {
+                dateStr: string;
+                formattedDate: string;
+                companies: Record<number, {
+                  id: number;
+                  name: string;
+                  domain: string | null;
+                  website: string | null;
+                  logs: any[];
+                }>;
+              }> = {};
+
+              crmLogs.forEach(log => {
+                const date = new Date(log.occurredAt);
+                const dateStr = date.toISOString().slice(0, 10);
+
+                const todayStr = new Date().toISOString().slice(0, 10);
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+                let formattedDate = date.toLocaleDateString("sk-SK", {
+                  weekday: "long",
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric"
+                });
+
+                if (dateStr === todayStr) {
+                  formattedDate = `Dnes (${formattedDate})`;
+                } else if (dateStr === yesterdayStr) {
+                  formattedDate = `Včera (${formattedDate})`;
+                }
+
+                if (!groups[dateStr]) {
+                  groups[dateStr] = {
+                    dateStr,
+                    formattedDate,
+                    companies: {}
+                  };
+                }
+
+                if (!groups[dateStr].companies[log.companyId]) {
+                  groups[dateStr].companies[log.companyId] = {
+                    id: log.companyId,
+                    name: log.companyName,
+                    domain: log.companyDomain,
+                    website: log.companyWebsite,
+                    logs: []
+                  };
+                }
+
+                groups[dateStr].companies[log.companyId].logs.push(log);
+              });
+
+              return Object.values(groups).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+            })();
+
+            if (groupedDays.length === 0) {
+              return (
+                <div className="flex-1 flex flex-col items-center justify-center py-20 text-slate-500 gap-3 border border-white/5 rounded-2xl glass-panel">
+                  <Clock className="h-8 w-8 text-slate-600" />
+                  <div className="text-center">
+                    <span className="text-sm font-semibold text-slate-300 block">Zatiaľ žiadna denná aktivita</span>
+                    <span className="text-xs text-slate-500 mt-1 block font-normal">Otvorte detail ktorejkoľvek firmy a kliknite na "Add to CRM Today" pre začiatok dňa!</span>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div className="flex flex-col gap-6">
+                {groupedDays.map((day) => (
+                  <section key={day.dateStr} className="w-full glass-panel rounded-2xl overflow-hidden flex flex-col border border-white/5">
+                    {/* Day Header */}
+                    <div className="p-4 bg-slate-950/40 border-b border-white/5 flex items-center justify-between">
+                      <h3 className="font-extrabold text-sm text-emerald-400 flex items-center gap-2 capitalize">
+                        <Clock className="h-4 w-4" />
+                        {day.formattedDate}
+                      </h3>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-white/5 border border-white/10 text-slate-400">
+                        {Object.keys(day.companies).length} {Object.keys(day.companies).length === 1 ? "firma" : Object.keys(day.companies).length < 5 ? "firmy" : "firiem"}
+                      </span>
+                    </div>
+
+                    {/* Table */}
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/5 bg-slate-900/30 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                          <th className="py-2.5 px-4">Firma</th>
+                          <th className="py-2.5 px-3">Webstránka</th>
+                          <th className="py-2.5 px-3 w-[55%]">História Aktivít / Záznamy</th>
+                          <th className="py-2.5 px-4 text-right">Akcie</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.values(day.companies).map((c) => {
+                          const isInlineEditing = inlineLogCompanyId === c.id;
+                          return (
+                            <tr
+                              key={c.id}
+                              className="border-b border-white/5 hover:bg-white/2 transition group"
+                            >
+                              {/* Company Name */}
+                              <td className="py-3 px-4 font-semibold text-slate-100">
+                                <button
+                                  onClick={() => setSelectedCompanyId(c.id)}
+                                  className="hover:text-indigo-400 hover:underline cursor-pointer transition text-left"
+                                >
+                                  {c.name}
+                                </button>
+                              </td>
+
+                              {/* Website */}
+                              <td className="py-3 px-3">
+                                {c.domain ? (
+                                  <a
+                                    href={c.website || `https://${c.domain}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-indigo-400 hover:text-indigo-300 hover:underline font-medium text-xs flex items-center gap-1 inline-flex"
+                                  >
+                                    {c.domain}
+                                    <ExternalLink className="h-3 w-3" />
+                                  </a>
+                                ) : (
+                                  <span className="text-slate-600">—</span>
+                                )}
+                              </td>
+
+                              {/* Activity Logs List */}
+                              <td className="py-3 px-3">
+                                <div className="flex flex-col gap-1.5">
+                                  {c.logs.map((log: any) => {
+                                    const logTime = new Date(log.occurredAt).toLocaleTimeString("sk-SK", {
+                                      hour: "2-digit",
+                                      minute: "2-digit"
+                                    });
+
+                                    return (
+                                      <div key={log.id} className="text-xs flex items-start gap-2 bg-white/2 border border-white/5 rounded-lg p-2 max-w-xl">
+                                        <span className="text-[10px] shrink-0 text-slate-500 font-semibold mt-0.5">{logTime}</span>
+                                        <div className="flex items-start gap-1">
+                                          {log.channel === "call" ? (
+                                            <span className="text-indigo-400 shrink-0 font-bold">📞</span>
+                                          ) : log.channel === "email" ? (
+                                            <span className="text-sky-400 shrink-0 font-bold">✉️</span>
+                                          ) : (
+                                            <span className="text-slate-500 shrink-0 font-bold">✓</span>
+                                          )}
+                                          <div className="flex flex-col">
+                                            <span className="text-slate-200 font-medium">
+                                              {log.channel === "view" ? "Pridané do denného plánu" : log.note || log.subject}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </td>
+
+                              {/* Actions */}
+                              <td className="py-3 px-4 text-right">
+                                {isInlineEditing ? (
+                                  <div className="flex flex-col gap-2 items-end justify-end">
+                                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                      {inlineLogType === "call" ? "Záznam hovoru" : "Záznam e-mailu"}
+                                    </div>
+                                    <div className="flex gap-1.5 items-center">
+                                      <input
+                                        type="text"
+                                        placeholder="Zápis z hovoru / e-mailu..."
+                                        value={inlineLogNote}
+                                        onChange={(e) => setInlineLogNote(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") handleSaveInlineLog(c.id);
+                                          if (e.key === "Escape") setInlineLogCompanyId(null);
+                                        }}
+                                        className="bg-slate-950 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 w-48"
+                                        autoFocus
+                                      />
+                                      <button
+                                        onClick={() => handleSaveInlineLog(c.id)}
+                                        className="px-2.5 py-1 rounded bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-500 transition cursor-pointer"
+                                      >
+                                        Uložiť
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setInlineLogCompanyId(null);
+                                          setInlineLogType(null);
+                                        }}
+                                        className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-rose-400"
+                                      >
+                                        Zrušiť
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      onClick={() => {
+                                        setInlineLogCompanyId(c.id);
+                                        setInlineLogType("call");
+                                        setInlineLogNote("");
+                                      }}
+                                      className="p-2 rounded-lg border border-white/10 hover:bg-white/5 text-indigo-400 hover:text-indigo-300 transition cursor-pointer"
+                                      title="Pridať hovor"
+                                    >
+                                      <Phone className="h-4 w-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setInlineLogCompanyId(c.id);
+                                        setInlineLogType("email");
+                                        setInlineLogNote("");
+                                      }}
+                                      className="p-2 rounded-lg border border-white/10 hover:bg-white/5 text-sky-400 hover:text-sky-300 transition cursor-pointer"
+                                      title="Pridať e-mail"
+                                    >
+                                      <Mail className="h-4 w-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => setSelectedCompanyId(c.id)}
+                                      className="p-2 rounded-lg border border-white/10 hover:bg-white/5 text-slate-400 hover:text-white transition cursor-pointer"
+                                      title="Otvoriť detail"
+                                    >
+                                      <Building className="h-4 w-4" />
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </section>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
       )}
       </main>
     </div>

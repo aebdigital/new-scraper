@@ -45,6 +45,7 @@ export const companies = sqliteTable("companies", {
   revenueIdx: index("idx_companies_revenue").on(table.revenue),
   nameIdx: index("idx_companies_name").on(table.name),
   cityIdx: index("idx_companies_city").on(table.city),
+  legalFormIdx: index("idx_companies_legal_form").on(table.legalFormCode),
 }));
 
 // Website Snapshots Table (Historical records)

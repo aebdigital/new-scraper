@@ -17,8 +17,8 @@ export async function POST(
     const body = await request.json();
     const { channel, occurredAt, note } = body;
 
-    if (!channel || (channel !== "call" && channel !== "email")) {
-      return NextResponse.json({ error: "Invalid channel (must be call or email)" }, { status: 400 });
+    if (!channel || (channel !== "call" && channel !== "email" && channel !== "view")) {
+      return NextResponse.json({ error: "Invalid channel (must be call, email, or view)" }, { status: 400 });
     }
 
     const inserted = await db
@@ -28,7 +28,7 @@ export async function POST(
         channel,
         direction: "out",
         occurredAt: occurredAt || Date.now(),
-        subject: note || `${channel === "call" ? "Call" : "Email"} log`,
+        subject: note || `${channel === "call" ? "Call" : channel === "email" ? "Email" : "CRM Tracker"} log`,
         bodyText: note || "",
         source: "manual",
       })
