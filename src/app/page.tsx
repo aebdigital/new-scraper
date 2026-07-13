@@ -780,7 +780,7 @@ export default function Dashboard() {
   return (
     <div className="flex-1 flex flex-col p-6 w-full gap-6">
       {/* Header */}
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/5 pb-5">
+      <header className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-white/5 pb-5">
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-cyan-400 flex items-center gap-2">
             Eagle Eye <span className="text-xs font-semibold px-2 py-0.5 rounded border border-indigo-500/30 text-indigo-400 bg-indigo-500/5 uppercase">Slovak B2B CRM</span>
@@ -790,57 +790,76 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {/* Crawl batch trigger */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {crawlProgressMessage && (
-            <div className="text-xs bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 px-3 py-2 rounded-lg flex items-center gap-2 max-w-xs animate-pulse">
-              <Sparkles className="h-3 w-3 text-cyan-400" />
-              <span>{crawlProgressMessage}</span>
-            </div>
-          )}
-          <button
-            onClick={handleBatchCrawl}
-            disabled={isCrawlingBatch}
-            className="glass-panel px-4 py-2 text-sm font-medium rounded-lg text-indigo-300 hover:text-white flex items-center justify-center gap-2 glass-card-hover cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw className={`h-4 w-4 ${isCrawlingBatch ? "animate-spin" : ""}`} />
-            Run Batch Crawl (20)
-          </button>
+        {/* Tab Navigation & Legal Form Selector */}
+        <div className="flex flex-col items-end gap-2.5">
+          {/* Tab Navigation */}
+          <nav className="flex gap-1 bg-slate-950/60 p-1 rounded-xl border border-white/5 w-fit">
+            <button
+              onClick={() => { setActiveTab("companies"); setSelectedRivalId(null); }}
+              className={`px-5 py-2 text-sm font-semibold rounded-lg transition flex items-center gap-2 cursor-pointer ${
+                activeTab === "companies"
+                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <Building className="h-4 w-4" />
+              Companies
+            </button>
+            <button
+              onClick={() => { setActiveTab("rivals"); setSelectedCompanyId(null); }}
+              className={`px-5 py-2 text-sm font-semibold rounded-lg transition flex items-center gap-2 cursor-pointer ${
+                activeTab === "rivals"
+                  ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
+              }`}
+            >
+              <Swords className="h-4 w-4" />
+              Rivals
+              {rivalsTotalCount > 0 && (
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                  activeTab === "rivals" ? "bg-white/20 text-white" : "bg-rose-500/20 text-rose-400"
+                }`}>
+                  {rivalsTotalCount}
+                </span>
+              )}
+            </button>
+          </nav>
+
+          {/* Legal Form Selector */}
+          <div className="flex bg-slate-950/60 p-0.5 rounded-lg border border-white/10 select-none w-fit">
+            <button
+              onClick={() => { setLegalForm(""); setPage(1); }}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
+                legalForm === ""
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              All Entities
+            </button>
+            <button
+              onClick={() => { setLegalForm("sro"); setPage(1); }}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
+                legalForm === "sro"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              s.r.o.
+            </button>
+            <button
+              onClick={() => { setLegalForm("sole_trader"); setPage(1); }}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
+                legalForm === "sole_trader"
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              Živnosti
+            </button>
+          </div>
         </div>
       </header>
-
-      {/* Tab Navigation */}
-      <nav className="flex gap-1 bg-slate-950/60 p-1 rounded-xl border border-white/5 w-fit">
-        <button
-          onClick={() => { setActiveTab("companies"); setSelectedRivalId(null); }}
-          className={`px-5 py-2 text-sm font-semibold rounded-lg transition flex items-center gap-2 cursor-pointer ${
-            activeTab === "companies"
-              ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/20"
-              : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
-          }`}
-        >
-          <Building className="h-4 w-4" />
-          Companies
-        </button>
-        <button
-          onClick={() => { setActiveTab("rivals"); setSelectedCompanyId(null); }}
-          className={`px-5 py-2 text-sm font-semibold rounded-lg transition flex items-center gap-2 cursor-pointer ${
-            activeTab === "rivals"
-              ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20"
-              : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
-          }`}
-        >
-          <Swords className="h-4 w-4" />
-          Rivals
-          {rivalsTotalCount > 0 && (
-            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-              activeTab === "rivals" ? "bg-white/20 text-white" : "bg-rose-500/20 text-rose-400"
-            }`}>
-              {rivalsTotalCount}
-            </span>
-          )}
-        </button>
-      </nav>
 
 
 
@@ -1052,42 +1071,6 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Legal Form Selector */}
-              <div className="flex flex-col gap-1.5 self-start lg:self-auto">
-                <label className="text-[10px] uppercase font-semibold text-slate-500 tracking-wider">Legal Form</label>
-                <div className="flex bg-slate-950/60 p-0.5 rounded-lg border border-white/10 select-none">
-                  <button
-                    onClick={() => { setLegalForm(""); setPage(1); }}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
-                      legalForm === ""
-                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    All Entities
-                  </button>
-                  <button
-                    onClick={() => { setLegalForm("sro"); setPage(1); }}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
-                      legalForm === "sro"
-                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    Companies (s.r.o.)
-                  </button>
-                  <button
-                    onClick={() => { setLegalForm("sole_trader"); setPage(1); }}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
-                      legalForm === "sole_trader"
-                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    Sole Traders (Živnosti)
-                  </button>
-                </div>
-              </div>
             </div>
 
             {/* Row 3: Sort and Metrics status */}
@@ -1453,6 +1436,22 @@ export default function Dashboard() {
                     <span className="text-[9px] text-slate-500 uppercase font-semibold">Activity Description</span>
                     <span className="font-medium text-slate-300 text-xs leading-normal">
                       {getNaceDescription(detailCompany.nace)}
+                    </span>
+                  </div>
+                )}
+                {detailCompany.naceSection && (
+                  <div className="bg-white/2 border border-white/5 rounded-xl p-2.5 flex flex-col gap-0.5">
+                    <span className="text-[9px] text-slate-500 uppercase font-semibold">NACE Section</span>
+                    <span className="font-medium text-slate-300 text-xs leading-normal">
+                      {getNaceDescription(detailCompany.naceSection)}
+                    </span>
+                  </div>
+                )}
+                {detailCompany.naceDivision && (
+                  <div className="bg-white/2 border border-white/5 rounded-xl p-2.5 flex flex-col gap-0.5">
+                    <span className="text-[9px] text-slate-500 uppercase font-semibold">NACE Division</span>
+                    <span className="font-medium text-slate-300 text-xs leading-normal">
+                      {getNaceDescription(detailCompany.naceDivision)}
                     </span>
                   </div>
                 )}
