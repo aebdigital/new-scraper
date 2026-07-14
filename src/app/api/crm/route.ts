@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { communications, companies } from "@/lib/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc, sql } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   try {
@@ -16,10 +16,11 @@ export async function GET(request: NextRequest) {
         companyName: companies.name,
         companyDomain: companies.domain,
         companyWebsite: companies.website,
+        commCount: sql<number>`(SELECT COUNT(*) FROM communications WHERE company_id = ${companies.id} AND channel = 'email')`,
       })
       .from(communications)
       .innerJoin(companies, eq(communications.companyId, companies.id))
-      .where(eq(communications.source, "manual"))
+      .where(and(eq(communications.source, "manual"), sql`coalesce(${communications.subject}, '') not like '[TAG:%'`))
       .orderBy(desc(communications.occurredAt))
       .limit(1000);
 

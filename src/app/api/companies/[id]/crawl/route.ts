@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { companies, websiteSnapshots, changeEvents, communications } from "@/lib/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql, getTableColumns } from "drizzle-orm";
 import { crawlCompany } from "@/lib/crawler/worker";
 
 export async function POST(
@@ -16,7 +16,11 @@ export async function POST(
     }
 
     const companyData = await db
-      .select()
+      .select({
+        ...getTableColumns(companies),
+        commCount: sql<number>`(SELECT COUNT(*) FROM communications WHERE company_id = ${companies.id} AND channel = 'email')`,
+        hasWarning: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = ${companies.id} AND source = 'manual' AND subject = '[CRM:warning]')`,
+      })
       .from(companies)
       .where(eq(companies.id, companyId))
       .limit(1);
@@ -38,7 +42,11 @@ export async function POST(
 
     // Fetch updated company and its latest snapshot and events
     const updatedCompany = await db
-      .select()
+      .select({
+        ...getTableColumns(companies),
+        commCount: sql<number>`(SELECT COUNT(*) FROM communications WHERE company_id = ${companies.id} AND channel = 'email')`,
+        hasWarning: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = ${companies.id} AND source = 'manual' AND subject = '[CRM:warning]')`,
+      })
       .from(companies)
       .where(eq(companies.id, companyId))
       .limit(1);
@@ -82,7 +90,11 @@ export async function GET(
     }
 
     const companyData = await db
-      .select()
+      .select({
+        ...getTableColumns(companies),
+        commCount: sql<number>`(SELECT COUNT(*) FROM communications WHERE company_id = ${companies.id} AND channel = 'email')`,
+        hasWarning: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = ${companies.id} AND source = 'manual' AND subject = '[CRM:warning]')`,
+      })
       .from(companies)
       .where(eq(companies.id, companyId))
       .limit(1);

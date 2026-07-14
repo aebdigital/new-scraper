@@ -116,7 +116,13 @@ export async function GET(request: NextRequest) {
     const data = await db
       .select({
         ...getTableColumns(companies),
-        commCount: sql<number>`(SELECT COUNT(*) FROM communications WHERE company_id = companies.id)`,
+        commCount: sql<number>`(SELECT COUNT(*) FROM communications WHERE company_id = companies.id AND channel = 'email')`,
+        hasWarning: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = companies.id AND source = 'manual' AND subject = '[CRM:warning]')`,
+        hasNextDayLead: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = companies.id AND source = 'manual' AND body_text = '[NEXT_DAY_LEAD] New lead')`,
+        hasBrokenWebsiteLead: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = companies.id AND source = 'manual' AND body_text like '%[HEART:broken]%')`,
+        hasNewWebsiteTag: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = companies.id AND source = 'manual' AND subject = '[TAG:new_website]')`,
+        hasNewSiteComingTag: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = companies.id AND source = 'manual' AND subject = '[TAG:new_site_coming]')`,
+        hasNoWebsiteTag: sql<number>`EXISTS (SELECT 1 FROM communications WHERE company_id = companies.id AND source = 'manual' AND subject = '[TAG:no_website]')`,
       })
       .from(companies)
       .where(whereClause)

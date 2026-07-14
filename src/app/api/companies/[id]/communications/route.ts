@@ -66,6 +66,54 @@ export async function DELETE(
     const { searchParams } = new URL(request.url);
     const commIdStr = searchParams.get("commId");
     const allForDate = searchParams.get("allForDate");
+    const tag = searchParams.get("tag");
+    const marker = searchParams.get("marker");
+
+    if (tag) {
+      const allowedTags = new Set(["new_website", "new_site_coming", "no_website"]);
+      if (!allowedTags.has(tag)) {
+        return NextResponse.json({ error: "Invalid tag" }, { status: 400 });
+      }
+
+      await db
+        .delete(communications)
+        .where(
+          and(
+            eq(communications.companyId, companyId),
+            eq(communications.source, "manual"),
+            eq(communications.subject, `[TAG:${tag}]`)
+          )
+        );
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (marker) {
+      const markerSql =
+        marker === "next_day_lead"
+          ? sql`${communications.bodyText} = '[NEXT_DAY_LEAD] New lead'`
+          : marker === "new_site_coming_lead"
+          ? sql`${communications.bodyText} like '%[STAR:coming]%'`
+          : marker === "broken_website_lead"
+          ? sql`${communications.bodyText} like '%[HEART:broken]%'`
+          : null;
+
+      if (!markerSql) {
+        return NextResponse.json({ error: "Invalid marker" }, { status: 400 });
+      }
+
+      await db
+        .delete(communications)
+        .where(
+          and(
+            eq(communications.companyId, companyId),
+            eq(communications.source, "manual"),
+            markerSql
+          )
+        );
+
+      return NextResponse.json({ success: true });
+    }
 
     if (allForDate) {
       const dateParts = allForDate.split("-");
@@ -123,22 +171,36 @@ export async function PATCH(
     }
 
     const body = await request.json();
-    const { commId, note } = body;
-    if (!commId || note === undefined) {
-      return NextResponse.json({ error: "Missing commId or note" }, { status: 400 });
+    const { commId, note, occurredAt } = body;
+    if (!commId || (note === undefined && occurredAt === undefined)) {
+      return NextResponse.json({ error: "Missing commId, note, or occurredAt" }, { status: 400 });
     }
 
-    const existing = await db
-      .select({ subject: communications.subject })
-      .from(communications)
-      .where(and(eq(communications.id, commId), eq(communications.companyId, companyId)))
-      .limit(1);
+    const updateValues: { bodyText?: string; subject?: string; occurredAt?: number } = {};
 
-    const keepSubject = isCrmOutcomeSubject(existing[0]?.subject);
+    if (occurredAt !== undefined) {
+      const nextOccurredAt = Number(occurredAt);
+      if (!Number.isFinite(nextOccurredAt)) {
+        return NextResponse.json({ error: "Invalid occurredAt" }, { status: 400 });
+      }
+      updateValues.occurredAt = nextOccurredAt;
+    }
+
+    if (note !== undefined) {
+      const existing = await db
+        .select({ subject: communications.subject })
+        .from(communications)
+        .where(and(eq(communications.id, commId), eq(communications.companyId, companyId)))
+        .limit(1);
+
+      const keepSubject = isCrmOutcomeSubject(existing[0]?.subject);
+      updateValues.bodyText = note;
+      if (!keepSubject) updateValues.subject = note;
+    }
 
     await db
       .update(communications)
-      .set(keepSubject ? { bodyText: note } : { bodyText: note, subject: note })
+      .set(updateValues)
       .where(and(eq(communications.id, commId), eq(communications.companyId, companyId)));
 
     return NextResponse.json({ success: true });

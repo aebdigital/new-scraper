@@ -44,6 +44,8 @@ import {
   Landmark,
   GraduationCap,
   HeartPulse,
+  Heart,
+  Star,
   Palette,
   Wrench,
   Pencil,
@@ -74,6 +76,12 @@ interface Company {
   naceSubdivision: string | null;
   legalFormCode: string | null;
   commCount?: number;
+  hasWarning?: number | boolean;
+  hasNextDayLead?: number | boolean;
+  hasBrokenWebsiteLead?: number | boolean;
+  hasNewWebsiteTag?: number | boolean;
+  hasNewSiteComingTag?: number | boolean;
+  hasNoWebsiteTag?: number | boolean;
   financialHistory?: string | null;
   lastCalledAt?: number | null;
   lastCalledNote?: string | null;
@@ -357,7 +365,7 @@ const getNaceDescription = (code: string | null) => {
 
 const cleanCrmLogNote = (note: string | null | undefined) =>
   (note || "")
-    .replace(/^\[(REMIND|NOANSWER|INTEREST|DECLINE)\]\s*/i, "")
+    .replace(/^\[(REMIND|NOANSWER|INTEREST|DECLINE|WARNING)\]\s*/i, "")
     .replace(/^Nový záujem – poslať mail$/i, "")
     .trim();
 
@@ -368,6 +376,7 @@ const getCrmOutcome = (note: string | null | undefined) => {
   if (text.startsWith("[crm:noanswer]") || text.startsWith("[noanswer]") || text.includes("nezdvihol")) return "noanswer";
   if (text.startsWith("[crm:interest]") || text.startsWith("[interest]") || text.includes("nový záujem")) return "interest";
   if (text.startsWith("[crm:decline]") || text.startsWith("[decline]") || text.includes("odmietol") || text.includes("decline")) return "decline";
+  if (text.startsWith("[crm:warning]") || text.startsWith("[warning]") || text.includes("nepríjem") || text.includes("neprijem") || text.includes("warning")) return "warning";
   return null;
 };
 
@@ -380,6 +389,11 @@ const getTomorrowDateValue = () => {
 const toLocalDateValue = (date: Date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
+const toLocalDateTimeValue = (timestamp: number) => {
+  const date = new Date(timestamp);
+  return `${toLocalDateValue(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+};
+
 const formatReminderDate = (dateValue: string) => {
   const date = new Date(`${dateValue}T00:00:00`);
   if (Number.isNaN(date.getTime())) return dateValue;
@@ -388,6 +402,32 @@ const formatReminderDate = (dateValue: string) => {
     month: "2-digit",
     year: "numeric",
   });
+};
+
+const formatCompactSkDate = (timestamp: number) =>
+  new Date(timestamp).toLocaleDateString("sk-SK", {
+    day: "numeric",
+    month: "numeric",
+  });
+
+const getReminderTimestamp = (dateValue: string, fallbackTimestamp = Date.now()) => {
+  const fallbackDate = new Date(fallbackTimestamp);
+  const date = new Date(`${dateValue}T${String(fallbackDate.getHours()).padStart(2, "0")}:${String(fallbackDate.getMinutes()).padStart(2, "0")}:00`);
+  return Number.isNaN(date.getTime()) ? fallbackTimestamp : date.getTime();
+};
+
+const parseReminderOriginalCallDate = (note: string | null | undefined) => {
+  const text = cleanCrmLogNote(note);
+  const match = text.match(/mal som sa ozvať,?\s*volali sme\s*(\d{1,2}\.\s*\d{1,2}\.?(?:\s*\d{4})?)/i);
+  return match ? match[1].trim() : "";
+};
+
+const parseCompactSkDateValue = (dateText: string, fallbackDateValue = toLocalDateValue(new Date())) => {
+  const fallbackYear = Number(fallbackDateValue.slice(0, 4)) || new Date().getFullYear();
+  const match = dateText.match(/(\d{1,2})\.\s*(\d{1,2})\.?(?:\s*(\d{4}))?/);
+  if (!match) return "";
+  const [, day, month, year] = match;
+  return `${year || fallbackYear}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 };
 
 const parseReminderDateValue = (note: string | null | undefined) => {
@@ -411,6 +451,7 @@ const parseReminderNoteText = (note: string | null | undefined) => {
     previous = text;
     text = text
       .replace(/^Pripomenúť:\s*/i, "")
+      .replace(/mal som sa ozvať,?\s*volali sme\s*\d{1,2}\.\s*\d{1,2}\.?(?:\s*\d{4})?\s*[-–—|:]?\s*/i, "")
       .replace(/\d{1,2}\.\s*\d{1,2}\.\s*\d{4}\s*[-–—|:]?\s*/g, "")
       .replace(/\d{4}-\d{2}-\d{2}\s*[-–—|:]?\s*/g, "")
       .trim();
@@ -419,9 +460,20 @@ const parseReminderNoteText = (note: string | null | undefined) => {
   return text;
 };
 
-const buildReminderNote = (dateValue: string, noteText = "") => {
+const buildReminderNote = (
+  dateValue: string,
+  noteText = "",
+  originalCall?: number | string
+) => {
   const note = parseReminderNoteText(noteText);
-  return note ? `Pripomenúť: ${formatReminderDate(dateValue)} – ${note}` : `Pripomenúť: ${formatReminderDate(dateValue)}`;
+  const originalCallLabel =
+    typeof originalCall === "number"
+      ? formatCompactSkDate(originalCall)
+      : originalCall;
+  const originalText = originalCallLabel ? `Mal som sa ozvať, volali sme ${originalCallLabel}` : "";
+  return [formatReminderDate(dateValue), originalText, note]
+    .filter(Boolean)
+    .reduce((value, part, index) => (index === 0 ? `Pripomenúť: ${part}` : `${value} – ${part}`), "");
 };
 
 function ReminderDatePicker({
@@ -771,6 +823,7 @@ export default function Dashboard() {
   // CRM daily logs state
   const [crmLogs, setCrmLogs] = useState<any[]>([]);
   const [crmLoading, setCrmLoading] = useState(false);
+  const [warningMenuCompanyId, setWarningMenuCompanyId] = useState<number | null>(null);
 
   // CRM inline logging states
   const [inlineLogCompanyId, setInlineLogCompanyId] = useState<number | null>(null);
@@ -786,6 +839,8 @@ export default function Dashboard() {
   // CRM log note editing
   const [editingLogId, setEditingLogId] = useState<number | null>(null);
   const [editingLogText, setEditingLogText] = useState("");
+  const [editingLogTimeId, setEditingLogTimeId] = useState<number | null>(null);
+  const [editingLogTimeValue, setEditingLogTimeValue] = useState("");
 
   // CRM call/email logging states
   const [callNote, setCallNote] = useState("");
@@ -1136,7 +1191,7 @@ export default function Dashboard() {
         );
         setCompanies((prev) =>
           prev.map((c) =>
-            c.id === detailCompany.id
+            c.id === detailCompany.id && comm.channel === "email"
               ? { ...c, commCount: (c.commCount ?? 0) + 1 }
               : c
           )
@@ -1157,10 +1212,11 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (!data.error) {
+        const deletedComm = detailComms.find((item) => item.id === commId);
         setDetailComms((prev) => prev.filter((item) => item.id !== commId));
         setCompanies((prev) =>
           prev.map((c) =>
-            c.id === detailCompany.id
+            c.id === detailCompany.id && deletedComm?.channel === "email"
               ? { ...c, commCount: Math.max(0, (c.commCount ?? 0) - 1) }
               : c
           )
@@ -1229,17 +1285,186 @@ export default function Dashboard() {
       const data = await res.json();
       if (!data.error && data.communication) {
         setDetailComms((prev) => [data.communication, ...prev]);
-        setCompanies((prev) =>
-          prev.map((c) =>
-            c.id === companyId
-              ? { ...c, commCount: (c.commCount ?? 0) + 1 }
-              : c
-          )
-        );
         fetchCRM(true);
       }
     } catch (e) {
       console.error("Error adding to CRM:", e);
+    }
+  };
+
+  const handleAddCompanyToNextDayLeads = async (companyId: number) => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channel: "view",
+          occurredAt: tomorrow.getTime(),
+          note: "[NEXT_DAY_LEAD] New lead",
+        }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setCompanies((prev) =>
+          prev.map((c) => (c.id === companyId ? { ...c, hasNextDayLead: true } : c))
+        );
+        fetchCRM(true);
+      }
+    } catch (e) {
+      console.error("Error adding next-day lead:", e);
+    }
+  };
+
+  const createNextDayWishlistLead = async (companyId: number, note: string) => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+
+    const res = await fetch(`/api/companies/${companyId}/communications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channel: "view",
+        occurredAt: tomorrow.getTime(),
+        note,
+      }),
+    });
+    return res.json();
+  };
+
+  const deleteCompanyMarker = async (companyId: number, marker: "next_day_lead" | "new_site_coming_lead" | "broken_website_lead") => {
+    const res = await fetch(`/api/companies/${companyId}/communications?marker=${marker}`, {
+      method: "DELETE",
+    });
+    return res.json();
+  };
+
+  const handleCycleHeartLead = async (company: Company) => {
+    const hasNextDayLead = Boolean(company.hasNextDayLead);
+    const hasBrokenWebsiteLead = Boolean(company.hasBrokenWebsiteLead);
+
+    try {
+      if (!hasNextDayLead && !hasBrokenWebsiteLead) {
+        const data = await createNextDayWishlistLead(company.id, "[NEXT_DAY_LEAD] New lead");
+        if (!data.error) {
+          setCompanies((prev) =>
+            prev.map((c) => (c.id === company.id ? { ...c, hasNextDayLead: true, hasBrokenWebsiteLead: false } : c))
+          );
+          fetchCRM(true);
+        }
+        return;
+      }
+
+      if (hasNextDayLead) {
+        await deleteCompanyMarker(company.id, "next_day_lead");
+        const data = await createNextDayWishlistLead(company.id, "[NEXT_DAY_LEAD] [HEART:broken] Broken website wishlist");
+        if (!data.error) {
+          setCompanies((prev) =>
+            prev.map((c) => (c.id === company.id ? { ...c, hasNextDayLead: false, hasBrokenWebsiteLead: true } : c))
+          );
+          fetchCRM(true);
+        }
+        return;
+      }
+
+      const data = await deleteCompanyMarker(company.id, "broken_website_lead");
+      if (!data.error) {
+        setCompanies((prev) =>
+          prev.map((c) => (c.id === company.id ? { ...c, hasBrokenWebsiteLead: false } : c))
+        );
+        fetchCRM(true);
+      }
+    } catch (e) {
+      console.error("Error cycling heart lead:", e);
+    }
+  };
+
+  const handleCycleWebsiteStar = async (company: Company) => {
+    const hasNewWebsiteTag = Boolean(company.hasNewWebsiteTag);
+    const hasNewSiteComingTag = Boolean(company.hasNewSiteComingTag);
+
+    try {
+      if (!hasNewWebsiteTag && !hasNewSiteComingTag) {
+        const res = await fetch(`/api/companies/${company.id}/communications`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channel: "view",
+            occurredAt: Date.now(),
+            note: "[TAG:new_website]",
+          }),
+        });
+        const data = await res.json();
+        if (!data.error) {
+          setCompanies((prev) =>
+            prev.map((c) => (c.id === company.id ? { ...c, hasNewWebsiteTag: true, hasNewSiteComingTag: false } : c))
+          );
+        }
+        return;
+      }
+
+      if (hasNewWebsiteTag) {
+        await fetch(`/api/companies/${company.id}/communications?tag=new_website`, { method: "DELETE" });
+        const tagRes = await fetch(`/api/companies/${company.id}/communications`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            channel: "view",
+            occurredAt: Date.now(),
+            note: "[TAG:new_site_coming]",
+          }),
+        });
+        const leadData = await createNextDayWishlistLead(company.id, "[NEXT_DAY_LEAD] [STAR:coming] New site coming");
+        const tagData = await tagRes.json();
+        if (!tagData.error && !leadData.error) {
+          setCompanies((prev) =>
+            prev.map((c) => (c.id === company.id ? { ...c, hasNewWebsiteTag: false, hasNewSiteComingTag: true } : c))
+          );
+          fetchCRM(true);
+        }
+        return;
+      }
+
+      const tagRes = await fetch(`/api/companies/${company.id}/communications?tag=new_site_coming`, { method: "DELETE" });
+      await deleteCompanyMarker(company.id, "new_site_coming_lead");
+      const tagData = await tagRes.json();
+      if (!tagData.error) {
+        setCompanies((prev) =>
+          prev.map((c) => (c.id === company.id ? { ...c, hasNewSiteComingTag: false } : c))
+        );
+        fetchCRM(true);
+      }
+    } catch (e) {
+      console.error("Error cycling website star:", e);
+    }
+  };
+
+  const handleToggleCompanyTag = async (companyId: number, tag: "new_website" | "no_website", isActive: boolean) => {
+    const flagKey = tag === "new_website" ? "hasNewWebsiteTag" : "hasNoWebsiteTag";
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications${isActive ? `?tag=${tag}` : ""}`, {
+        method: isActive ? "DELETE" : "POST",
+        headers: isActive ? undefined : { "Content-Type": "application/json" },
+        body: isActive
+          ? undefined
+          : JSON.stringify({
+              channel: "view",
+              occurredAt: Date.now(),
+              note: `[TAG:${tag}]`,
+            }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setCompanies((prev) =>
+          prev.map((c) => (c.id === companyId ? { ...c, [flagKey]: !isActive } : c))
+        );
+      }
+    } catch (e) {
+      console.error("Error toggling company tag:", e);
     }
   };
 
@@ -1271,12 +1496,13 @@ export default function Dashboard() {
   };
 
   // Quick call outcome log (no typing needed)
-  const handleQuickCallLog = async (companyId: number, outcome: "remind" | "noanswer" | "interest" | "decline") => {
+  const handleQuickCallLog = async (companyId: number, outcome: "remind" | "noanswer" | "interest" | "decline" | "warning") => {
     const noteMap = {
       remind: "Pripomenúť ďalší deň",
       noanswer: "Nezdvihol",
       interest: "",
       decline: "",
+      warning: "",
     };
     try {
       const res = await fetch(`/api/companies/${companyId}/communications`, {
@@ -1307,6 +1533,8 @@ export default function Dashboard() {
 
   const handleSaveReminderDate = async (companyId: number, dateValue = reminderDateValue) => {
     if (!dateValue) return;
+    const createdAt = Date.now();
+    const reminderTimestamp = getReminderTimestamp(dateValue, createdAt);
 
     try {
       const res = await fetch(`/api/companies/${companyId}/communications`, {
@@ -1314,8 +1542,8 @@ export default function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channel: "call",
-          occurredAt: Date.now(),
-          note: buildReminderNote(dateValue, reminderNoteValue),
+          occurredAt: reminderTimestamp,
+          note: buildReminderNote(dateValue, reminderNoteValue, createdAt),
           outcome: "remind",
         }),
       });
@@ -1348,18 +1576,24 @@ export default function Dashboard() {
 
   const handleSaveReminderLog = async (commId: number, companyId: number, dateValue = editingReminderDateValue, noteText = editingLogText) => {
     if (!dateValue) return;
-    await handleSaveCrmLogNote(commId, companyId, buildReminderNote(dateValue, noteText));
+    const currentLog = crmLogs.find((log: any) => log.id === commId);
+    const currentNote = currentLog?.note || currentLog?.subject || "";
+    const originalCallLabel =
+      parseReminderOriginalCallDate(currentNote) ||
+      formatCompactSkDate(currentLog?.occurredAt || Date.now());
+    const occurredAt = getReminderTimestamp(dateValue, currentLog?.occurredAt || Date.now());
+    await handleSaveCrmLogNote(commId, companyId, buildReminderNote(dateValue, noteText, originalCallLabel), occurredAt);
     setEditingReminderLogId(null);
     setOpenReminderCalendarLogId(null);
     setEditingReminderDateValue("");
   };
 
-  const handleSaveCrmLogNote = async (commId: number, companyId: number, newNote: string) => {
+  const handleSaveCrmLogNote = async (commId: number, companyId: number, newNote: string, occurredAt?: number) => {
     try {
       const res = await fetch(`/api/companies/${companyId}/communications`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ commId, note: newNote }),
+        body: JSON.stringify({ commId, note: newNote, occurredAt }),
       });
       const data = await res.json();
       if (!data.error) {
@@ -1368,6 +1602,32 @@ export default function Dashboard() {
       }
     } catch (e) {
       console.error("Error updating CRM log note:", e);
+    }
+  };
+
+  const handleSaveCrmLogTime = async (commId: number, companyId: number, value = editingLogTimeValue) => {
+    if (!value) return;
+    const occurredAt = new Date(value).getTime();
+    if (Number.isNaN(occurredAt)) return;
+
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commId, occurredAt }),
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setEditingLogTimeId(null);
+        fetchCRM(true);
+        if (detailCompany && detailCompany.id === companyId) {
+          setDetailComms((prev) =>
+            prev.map((item) => (item.id === commId ? { ...item, occurredAt } : item))
+          );
+        }
+      }
+    } catch (e) {
+      console.error("Error updating CRM log time:", e);
     }
   };
 
@@ -1398,12 +1658,13 @@ export default function Dashboard() {
       const data = await res.json();
       if (!data.error) {
         fetchCRM(true);
+        const deletedLog = crmLogs.find((item: any) => item.id === commId) || detailComms.find((item) => item.id === commId);
         if (detailCompany && detailCompany.id === companyId) {
           setDetailComms((prev) => prev.filter((item) => item.id !== commId));
         }
         setCompanies((prev) =>
           prev.map((c) =>
-            c.id === companyId
+            c.id === companyId && deletedLog?.channel === "email"
               ? { ...c, commCount: Math.max(0, (c.commCount ?? 0) - 1) }
               : c
           )
@@ -1413,6 +1674,37 @@ export default function Dashboard() {
       }
     } catch (e) {
       console.error("Error deleting CRM log:", e);
+    }
+  };
+
+  const handleRemoveWarning = async (companyId: number) => {
+    const warningLog = crmLogs.find(
+      (log: any) => log.companyId === companyId && (getCrmOutcome(log.subject) || getCrmOutcome(log.note)) === "warning"
+    );
+    if (!warningLog) {
+      setWarningMenuCompanyId(null);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/companies/${companyId}/communications?commId=${warningLog.id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!data.error) {
+        setWarningMenuCompanyId(null);
+        fetchCRM(true);
+        fetchCompanies(true);
+        setCompanies((prev) => prev.map((c) => (c.id === companyId ? { ...c, hasWarning: false } : c)));
+        if (detailCompany?.id === companyId) {
+          setDetailCompany((prev) => (prev ? { ...prev, hasWarning: false } : prev));
+          setDetailComms((prev) => prev.filter((item) => item.id !== warningLog.id));
+        }
+      } else {
+        alert(data.error);
+      }
+    } catch (e) {
+      console.error("Error removing warning:", e);
     }
   };
 
@@ -1506,39 +1798,40 @@ export default function Dashboard() {
             </button>
           </nav>
 
-          {/* Legal Form Selector */}
-          <div className="flex bg-slate-950/60 p-0.5 rounded-lg border border-white/10 select-none w-fit">
-            <button
-              onClick={() => { setLegalForm(""); setPage(1); }}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
-                legalForm === ""
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              All Entities
-            </button>
-            <button
-              onClick={() => { setLegalForm("sro"); setPage(1); }}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
-                legalForm === "sro"
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              s.r.o.
-            </button>
-            <button
-              onClick={() => { setLegalForm("sole_trader"); setPage(1); }}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
-                legalForm === "sole_trader"
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
-                  : "text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              Živnosti
-            </button>
-          </div>
+          {activeTab === "companies" && (
+            <div className="flex bg-slate-950/60 p-0.5 rounded-lg border border-white/10 select-none w-fit">
+              <button
+                onClick={() => { setLegalForm(""); setPage(1); }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
+                  legalForm === ""
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                All Entities
+              </button>
+              <button
+                onClick={() => { setLegalForm("sro"); setPage(1); }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
+                  legalForm === "sro"
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                s.r.o.
+              </button>
+              <button
+                onClick={() => { setLegalForm("sole_trader"); setPage(1); }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition cursor-pointer ${
+                  legalForm === "sole_trader"
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                Živnosti
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -1799,6 +2092,7 @@ export default function Dashboard() {
                 <thead>
                   <tr className="border-b border-white/5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 bg-white/2">
                     <th className="py-2 px-3">Company Name</th>
+                    <th className="py-2 px-1 w-28"></th>
                     <th className="py-2 px-3">Website</th>
                     <th className="py-2 px-3 text-right">Revenue</th>
                     <th className="py-2 px-3 text-right">Profit</th>
@@ -1814,7 +2108,7 @@ export default function Dashboard() {
                     <tr
                       key={c.id}
                       onClick={() => setSelectedCompanyId(c.id)}
-                      className={`transition cursor-pointer ${
+                      className={`group/row transition cursor-pointer ${
                         selectedCompanyId === c.id
                           ? "bg-indigo-500/10 hover:bg-indigo-500/15"
                           : c.revenue !== null && c.revenue !== undefined
@@ -1834,6 +2128,35 @@ export default function Dashboard() {
                           >
                             {c.name}
                           </a>
+                          {Boolean(c.hasWarning) && (
+                            <span className="relative flex-shrink-0">
+                              <button
+                                type="button"
+                                title="Pozor: nepríjemná komunikácia"
+                                className="text-yellow-300 cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setWarningMenuCompanyId(warningMenuCompanyId === c.id ? null : c.id);
+                                }}
+                              >
+                                ⚠️
+                              </button>
+                              {warningMenuCompanyId === c.id && (
+                                <div className="absolute left-0 top-full mt-1 z-[80] w-36 rounded-lg border border-yellow-400/30 bg-slate-950 p-1 shadow-xl">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveWarning(c.id);
+                                    }}
+                                    className="w-full rounded px-2 py-1 text-left text-[11px] font-semibold text-rose-300 hover:bg-white/5"
+                                  >
+                                    Remove warning
+                                  </button>
+                                </div>
+                              )}
+                            </span>
+                          )}
                           {(c.commCount ?? 0) > 0 && (
                             <span
                               title={`${c.commCount} emails on record`}
@@ -1864,6 +2187,96 @@ export default function Dashboard() {
                               🏆 #{c.finstatRank}
                             </span>
                           )}
+                        </div>
+                      </td>
+                      <td className="py-1.5 px-1">
+                        <div className="flex items-center justify-center gap-1">
+                          {(() => {
+                            const hasNextDayLead = Boolean(c.hasNextDayLead);
+                            const hasBrokenWebsiteLead = Boolean(c.hasBrokenWebsiteLead);
+                            const hasNewWebsiteTag = Boolean(c.hasNewWebsiteTag);
+                            const hasNewSiteComingTag = Boolean(c.hasNewSiteComingTag);
+                            const hasNoWebsiteTag = Boolean(c.hasNoWebsiteTag);
+                            return (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCycleHeartLead(c);
+                                  }}
+                                  className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                                    hasBrokenWebsiteLead
+                                      ? "opacity-100 border-slate-500 bg-slate-950 text-slate-100"
+                                      : hasNextDayLead
+                                      ? "opacity-100 border-rose-400/40 bg-rose-500/15 text-rose-300"
+                                      : "opacity-20 group-hover/row:opacity-100 focus:opacity-100 border-rose-400/25 bg-rose-500/5 text-rose-300 hover:text-rose-100 hover:bg-rose-500/20"
+                                  }`}
+                                  title={
+                                    hasBrokenWebsiteLead
+                                      ? "Wishlist: pokazený web"
+                                      : hasNextDayLead
+                                      ? "Už je v budúcom CRM zozname"
+                                      : "Pridať do zajtrajšieho CRM zoznamu"
+                                  }
+                                >
+                                  {hasBrokenWebsiteLead ? (
+                                    <span className="relative block h-3.5 w-3.5 text-[14px] leading-[14px]">
+                                      <span className="absolute inset-0 flex items-center justify-center">♥</span>
+                                      <span className="absolute -right-1 -top-1 text-[10px] font-black text-amber-300">!</span>
+                                    </span>
+                                  ) : (
+                                    <Heart className={`h-3.5 w-3.5 ${hasNextDayLead ? "fill-current" : ""}`} />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCycleWebsiteStar(c);
+                                  }}
+                                  className={`p-1.5 rounded-lg border transition cursor-pointer ${
+                                    hasNewSiteComingTag
+                                      ? "opacity-100 border-orange-400/50 bg-orange-500/20 text-orange-300"
+                                      : hasNewWebsiteTag
+                                      ? "opacity-100 border-amber-400/40 bg-amber-500/15 text-amber-300"
+                                      : "opacity-20 group-hover/row:opacity-100 focus:opacity-100 border-white/10 bg-white/2 text-slate-400 hover:text-amber-300 hover:bg-amber-500/10"
+                                  }`}
+                                  title={
+                                    hasNewSiteComingTag
+                                      ? "Na starom webe píšu, že nový web sa pripravuje"
+                                      : hasNewWebsiteTag
+                                      ? "Nový web, netreba služby"
+                                      : "Označiť nový web"
+                                  }
+                                >
+                                  <span className="relative block h-3.5 w-3.5">
+                                    <Star className={`h-3.5 w-3.5 ${hasNewWebsiteTag || hasNewSiteComingTag ? "fill-current" : ""}`} />
+                                    {hasNewSiteComingTag && (
+                                      <span className="absolute inset-0 flex items-center justify-center text-[8px] font-black text-slate-950">
+                                        ?
+                                      </span>
+                                    )}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleCompanyTag(c.id, "no_website", hasNoWebsiteTag);
+                                  }}
+                                  className={`h-7 min-w-7 rounded-lg border px-1.5 text-[11px] font-extrabold transition cursor-pointer ${
+                                    hasNoWebsiteTag
+                                      ? "opacity-100 border-sky-400/40 bg-sky-500/15 text-sky-300"
+                                      : "opacity-20 group-hover/row:opacity-100 focus:opacity-100 border-white/10 bg-white/2 text-slate-400 hover:text-sky-300 hover:bg-sky-500/10"
+                                  }`}
+                                  title="Nemá web vôbec"
+                                >
+                                  N
+                                </button>
+                              </>
+                            );
+                          })()}
                         </div>
                       </td>
                       <td 
@@ -2042,6 +2455,38 @@ export default function Dashboard() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2 max-w-[70%]">
                       <h3 className="font-extrabold text-lg text-slate-100 leading-tight">{detailCompany.name}</h3>
+                      {Boolean(detailCompany.hasWarning) && (
+                        <span className="relative">
+                          <button
+                            type="button"
+                            title="Pozor: nepríjemná komunikácia"
+                            className="text-yellow-300 cursor-pointer"
+                            onClick={() => setWarningMenuCompanyId(warningMenuCompanyId === detailCompany.id ? null : detailCompany.id)}
+                          >
+                            ⚠️
+                          </button>
+                          {warningMenuCompanyId === detailCompany.id && (
+                            <div className="absolute left-0 top-full mt-1 z-[80] w-36 rounded-lg border border-yellow-400/30 bg-slate-950 p-1 shadow-xl">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveWarning(detailCompany.id)}
+                                className="w-full rounded px-2 py-1 text-left text-[11px] font-semibold text-rose-300 hover:bg-white/5"
+                              >
+                                Remove warning
+                              </button>
+                            </div>
+                          )}
+                        </span>
+                      )}
+                      {(detailCompany.commCount ?? 0) > 0 && (
+                        <span
+                          title={`${detailCompany.commCount} emails on record`}
+                          className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 select-none flex-shrink-0 flex items-center gap-0.5"
+                        >
+                          <Mail className="h-2.5 w-2.5" />
+                          {detailCompany.commCount}
+                        </span>
+                      )}
                       {detailCompany.finstatRank && (
                         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center gap-0.5 select-none">
                           🏆 FinStat Top #{detailCompany.finstatRank}
@@ -2909,21 +3354,20 @@ export default function Dashboard() {
                   name: string;
                   domain: string | null;
                   website: string | null;
+                  commCount: number;
                   latestOccurredAt: number;
                   logs: any[];
                 }>;
               }> = {};
 
-              crmLogs.forEach(log => {
-                const date = new Date(log.occurredAt);
-                const dateStr = date.toISOString().slice(0, 10);
+              const todayStr = toLocalDateValue(new Date());
+              const yesterday = new Date();
+              yesterday.setDate(yesterday.getDate() - 1);
+              const yesterdayStr = toLocalDateValue(yesterday);
 
-                const todayStr = new Date().toISOString().slice(0, 10);
-                const yesterday = new Date();
-                yesterday.setDate(yesterday.getDate() - 1);
-                const yesterdayStr = yesterday.toISOString().slice(0, 10);
-
-                let formattedDate = date.toLocaleDateString("sk-SK", {
+              const getFormattedDayLabel = (dateStr: string) => {
+                const displayDate = new Date(`${dateStr}T00:00:00`);
+                let formattedDate = displayDate.toLocaleDateString("sk-SK", {
                   weekday: "long",
                   year: "numeric",
                   month: "long",
@@ -2936,10 +3380,14 @@ export default function Dashboard() {
                   formattedDate = `Včera (${formattedDate})`;
                 }
 
+                return formattedDate;
+              };
+
+              const addLogToGroup = (dateStr: string, log: any, latestOccurredAt: number, logMeta: any = {}) => {
                 if (!groups[dateStr]) {
                   groups[dateStr] = {
                     dateStr,
-                    formattedDate,
+                    formattedDate: getFormattedDayLabel(dateStr),
                     companies: {}
                   };
                 }
@@ -2950,16 +3398,64 @@ export default function Dashboard() {
                     name: log.companyName,
                     domain: log.companyDomain,
                     website: log.companyWebsite,
-                    latestOccurredAt: log.occurredAt,
+                    commCount: log.commCount || 0,
+                    latestOccurredAt,
                     logs: []
                   };
                 }
 
                 groups[dateStr].companies[log.companyId].latestOccurredAt = Math.max(
                   groups[dateStr].companies[log.companyId].latestOccurredAt,
-                  log.occurredAt
+                  latestOccurredAt
                 );
-                groups[dateStr].companies[log.companyId].logs.push(log);
+                groups[dateStr].companies[log.companyId].logs.push({
+                  ...log,
+                  ...logMeta,
+                });
+              };
+
+              crmLogs.forEach(log => {
+                const logOutcome = getCrmOutcome(log.subject) || getCrmOutcome(log.note);
+                const isWarningLog = logOutcome === "warning";
+                const reminderDateValue = logOutcome === "remind" ? parseReminderDateValue(log.note || log.subject) : "";
+                const reminderOriginalCallDate = logOutcome === "remind" ? parseReminderOriginalCallDate(log.note || log.subject) : "";
+                const sortableLogsForCompany = crmLogs.filter(
+                  (item) =>
+                    item.companyId === log.companyId &&
+                    (getCrmOutcome(item.subject) || getCrmOutcome(item.note)) !== "warning"
+                );
+                const groupingTimestamp = isWarningLog && sortableLogsForCompany.length > 0
+                  ? Math.max(...sortableLogsForCompany.map((item) => item.occurredAt))
+                  : log.occurredAt;
+
+                const date = new Date(groupingTimestamp);
+                const originalDateStr = toLocalDateValue(date);
+                const reminderOriginalDateValue = reminderOriginalCallDate
+                  ? parseCompactSkDateValue(reminderOriginalCallDate, reminderDateValue || originalDateStr)
+                  : "";
+                const dateStr = reminderDateValue || originalDateStr;
+                const logMeta = {
+                  reminderFollowUpDate: reminderDateValue || null,
+                  reminderOriginalCallDate: reminderOriginalCallDate || null,
+                  reminderOriginalDate: reminderOriginalDateValue || (reminderDateValue ? originalDateStr : null),
+                  reminderOriginalOccurredAt: reminderDateValue ? log.occurredAt : null,
+                };
+
+                addLogToGroup(dateStr, log, isWarningLog ? 0 : log.occurredAt, {
+                  ...logMeta,
+                  reminderTimelineRole: "followup",
+                });
+
+                if (
+                  logOutcome === "remind" &&
+                  reminderOriginalDateValue &&
+                  reminderOriginalDateValue !== dateStr
+                ) {
+                  addLogToGroup(reminderOriginalDateValue, log, log.occurredAt, {
+                    ...logMeta,
+                    reminderTimelineRole: "created",
+                  });
+                }
               });
 
               return Object.values(groups)
@@ -3018,9 +3514,18 @@ export default function Dashboard() {
                           const lastOutcome = (() => {
                             for (let i = 0; i < c.logs.length; i++) {
                               const outcome = getCrmOutcome(c.logs[i].subject) || getCrmOutcome(c.logs[i].note);
+                              if (outcome === "warning") continue;
                               if (outcome) return outcome;
                             }
                             return null;
+                          })();
+                          const hasCompanyWarning = c.logs.some((log: any) => (getCrmOutcome(log.subject) || getCrmOutcome(log.note)) === "warning");
+                          const nextDayLeadKind = (() => {
+                            const leadLog = c.logs.find((log: any) => log.channel === "view" && String(log.note || log.subject || "").includes("[NEXT_DAY_LEAD]"));
+                            const text = String(leadLog?.note || leadLog?.subject || "");
+                            if (text.includes("[STAR:coming]")) return "coming";
+                            if (text.includes("[HEART:broken]")) return "broken";
+                            return leadLog ? "regular" : null;
                           })();
 
                           const rowBg = lastOutcome === "remind"
@@ -3056,6 +3561,62 @@ export default function Dashboard() {
                                 >
                                   {c.name}
                                 </button>
+                                {nextDayLeadKind && (
+                                  <span className={`ml-2 inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[9px] font-bold ${
+                                    nextDayLeadKind === "coming"
+                                      ? "border-orange-400/30 bg-orange-500/15 text-orange-200"
+                                      : nextDayLeadKind === "broken"
+                                      ? "border-slate-500 bg-slate-950 text-slate-100"
+                                      : "border-rose-400/25 bg-rose-500/10 text-rose-200"
+                                  }`}>
+                                    {nextDayLeadKind === "coming" ? (
+                                      <span>★?</span>
+                                    ) : nextDayLeadKind === "broken" ? (
+                                      <span>♥!</span>
+                                    ) : (
+                                      <Heart className="h-2.5 w-2.5" />
+                                    )}
+                                    {nextDayLeadKind === "coming" ? "COMING" : nextDayLeadKind === "broken" ? "BROKEN" : "NEW"}
+                                  </span>
+                                )}
+                                {(c.commCount ?? 0) > 0 && (
+                                  <span
+                                    title={`${c.commCount} emails on record`}
+                                    className="ml-2 text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 select-none inline-flex items-center gap-0.5 align-middle"
+                                  >
+                                    <Mail className="h-2.5 w-2.5" />
+                                    {c.commCount}
+                                  </span>
+                                )}
+                                {hasCompanyWarning && (
+                                  <span className="relative ml-1">
+                                    <button
+                                      type="button"
+                                      title="Pozor: nepríjemná komunikácia"
+                                      className="text-yellow-300 cursor-pointer"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setWarningMenuCompanyId(warningMenuCompanyId === c.id ? null : c.id);
+                                      }}
+                                    >
+                                      ⚠️
+                                    </button>
+                                    {warningMenuCompanyId === c.id && (
+                                      <div className="absolute left-0 top-full mt-1 z-[80] w-36 rounded-lg border border-yellow-400/30 bg-slate-950 p-1 shadow-xl">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRemoveWarning(c.id);
+                                          }}
+                                          className="w-full rounded px-2 py-1 text-left text-[11px] font-semibold text-rose-300 hover:bg-white/5"
+                                        >
+                                          Remove warning
+                                        </button>
+                                      </div>
+                                    )}
+                                  </span>
+                                )}
                               </td>
 
                               {/* Website */}
@@ -3079,13 +3640,42 @@ export default function Dashboard() {
                               <td className="py-1 px-3">
                                 <div className="flex flex-col gap-1">
                                   {(() => {
-                                    const manualLogs = c.logs.filter((log: any) => log.channel !== "view");
+                                    const nextDayLeadKind = (() => {
+                                      const leadLog = c.logs.find((log: any) => log.channel === "view" && String(log.note || log.subject || "").includes("[NEXT_DAY_LEAD]"));
+                                      const text = String(leadLog?.note || leadLog?.subject || "");
+                                      if (text.includes("[STAR:coming]")) return "coming";
+                                      if (text.includes("[HEART:broken]")) return "broken";
+                                      return leadLog ? "regular" : null;
+                                    })();
+                                    const manualLogs = c.logs.filter((log: any) => {
+                                      if (log.channel === "view") return false;
+                                      return (getCrmOutcome(log.subject) || getCrmOutcome(log.note)) !== "warning";
+                                    });
 
                                     if (manualLogs.length === 0) {
                                       return (
-                                        <span className="text-[11px] text-slate-600 italic select-none">
-                                          Pridané do plánu (zatiaľ bez hovoru/e-mailu)
-                                        </span>
+                                        nextDayLeadKind ? (
+                                          <span className={`inline-flex w-fit items-center gap-1 rounded border px-2 py-0.5 text-[11px] font-bold select-none ${
+                                            nextDayLeadKind === "coming"
+                                              ? "border-orange-400/30 bg-orange-500/15 text-orange-200"
+                                              : nextDayLeadKind === "broken"
+                                              ? "border-slate-500 bg-slate-950 text-slate-100"
+                                              : "border-rose-400/25 bg-rose-500/10 text-rose-200"
+                                          }`}>
+                                            {nextDayLeadKind === "coming" ? (
+                                              <span>★?</span>
+                                            ) : nextDayLeadKind === "broken" ? (
+                                              <span>♥!</span>
+                                            ) : (
+                                              <Heart className="h-3 w-3" />
+                                            )}
+                                            {nextDayLeadKind === "coming" ? "New site coming" : nextDayLeadKind === "broken" ? "Broken website" : "New lead"}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[11px] text-slate-600 italic select-none">
+                                            Pridané do plánu (zatiaľ bez hovoru/e-mailu)
+                                          </span>
+                                        )
                                       );
                                     }
 
@@ -3100,6 +3690,13 @@ export default function Dashboard() {
                                       const reminderLogNoteText = parseReminderNoteText(log.note || log.subject);
                                       const activeReminderNoteText =
                                         editingReminderLogId === log.id ? editingLogText : reminderLogNoteText;
+                                      const showReminderFollowUpNote =
+                                        logOutcome === "remind" &&
+                                        log.reminderTimelineRole !== "created" &&
+                                        log.reminderFollowUpDate &&
+                                        (log.reminderOriginalCallDate || (log.reminderOriginalDate && log.reminderFollowUpDate !== log.reminderOriginalDate));
+                                      const reminderOriginalCallLabel =
+                                        log.reminderOriginalCallDate || formatCompactSkDate(log.reminderOriginalOccurredAt);
 
                                       return (
                                         <div key={log.id} className="text-xs flex items-center justify-between gap-2 bg-white/2 border border-white/5 rounded-md px-1.5 py-1 w-full group/log">
@@ -3112,7 +3709,36 @@ export default function Dashboard() {
                                               }
                                             }}
                                           >
-                                            <span className="text-[10px] shrink-0 text-slate-500 font-semibold">{logTime}</span>
+                                            {logOutcome !== "warning" && (
+                                              editingLogTimeId === log.id ? (
+                                                <input
+                                                  type="datetime-local"
+                                                  value={editingLogTimeValue}
+                                                  onChange={(e) => setEditingLogTimeValue(e.target.value)}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === "Enter") handleSaveCrmLogTime(log.id, c.id);
+                                                    if (e.key === "Escape") setEditingLogTimeId(null);
+                                                  }}
+                                                  onBlur={() => handleSaveCrmLogTime(log.id, c.id)}
+                                                  onClick={(e) => e.stopPropagation()}
+                                                  className="w-[150px] shrink-0 bg-slate-950 border border-white/10 rounded px-1 py-0.5 text-[10px] text-slate-100 focus:outline-none focus:border-indigo-500"
+                                                  autoFocus
+                                                />
+                                              ) : (
+                                                <button
+                                                  type="button"
+                                                  className="text-[10px] shrink-0 text-slate-500 font-semibold hover:text-indigo-300 cursor-pointer"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setEditingLogTimeId(log.id);
+                                                    setEditingLogTimeValue(toLocalDateTimeValue(log.occurredAt));
+                                                  }}
+                                                  title="Upraviť čas"
+                                                >
+                                                  {logTime}
+                                                </button>
+                                              )
+                                            )}
                                             <div className="flex items-center gap-1 flex-1 min-w-0">
                                               {logOutcome === "interest" ? (
                                                 <span className="flex items-center gap-0.5 text-emerald-300 shrink-0" title="Poslať mail po hovore">
@@ -3122,6 +3748,8 @@ export default function Dashboard() {
                                                 </span>
                                               ) : logOutcome === "decline" ? (
                                                 <span className="text-rose-300 shrink-0 font-bold" title="Odmietol">❌</span>
+                                              ) : logOutcome === "warning" ? (
+                                                <span className="text-yellow-300 shrink-0 font-bold" title="Pozor: nepríjemná komunikácia">⚠️</span>
                                               ) : log.channel === "call" ? (
                                                 <span className="text-indigo-400 shrink-0 font-bold">📞</span>
                                               ) : (
@@ -3129,59 +3757,66 @@ export default function Dashboard() {
                                               )}
                                               <div className="flex flex-col flex-1 min-w-0">
                                                 {logOutcome === "remind" ? (
-                                                  <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-1.5 w-full">
-                                                    <div className="relative">
-                                                      <button
-                                                        type="button"
-                                                        className="w-full flex items-center gap-1.5 text-left text-amber-100 font-semibold cursor-pointer hover:text-amber-300 transition truncate"
+                                                  <div className="flex flex-col gap-0.5">
+                                                    {showReminderFollowUpNote && (
+                                                      <span className="text-[10px] font-semibold text-amber-200/90">
+                                                        Mal som sa ozvať, volali sme {reminderOriginalCallLabel}
+                                                      </span>
+                                                    )}
+                                                    <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-1.5 w-full">
+                                                      <div className="relative">
+                                                        <button
+                                                          type="button"
+                                                          className="w-full flex items-center gap-1.5 text-left text-amber-100 font-semibold cursor-pointer hover:text-amber-300 transition truncate"
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            openReminderLogDatePicker(log.id, log.note || log.subject);
+                                                          }}
+                                                          title="Kliknite pre výber dátumu"
+                                                        >
+                                                          <CalendarDays className="h-3 w-3 shrink-0 text-amber-300" />
+                                                          <span className="truncate">
+                                                            {reminderLogDateValue ? formatReminderDate(reminderLogDateValue) : ""}
+                                                          </span>
+                                                        </button>
+                                                        {openReminderCalendarLogId === log.id && (
+                                                          <ReminderDatePicker
+                                                            value={editingReminderDateValue}
+                                                            onChange={(dateValue) => {
+                                                              setEditingReminderDateValue(dateValue);
+                                                              handleSaveReminderLog(log.id, c.id, dateValue, activeReminderNoteText);
+                                                            }}
+                                                          />
+                                                        )}
+                                                      </div>
+                                                      <input
+                                                        type="text"
+                                                        value={editingReminderLogId === log.id ? editingLogText : reminderLogNoteText}
+                                                        placeholder="Poznámka..."
                                                         onClick={(e) => {
                                                           e.stopPropagation();
-                                                          openReminderLogDatePicker(log.id, log.note || log.subject);
+                                                          if (editingReminderLogId !== log.id) {
+                                                            openReminderLogNoteEditor(log.id, log.note || log.subject);
+                                                          }
                                                         }}
-                                                        title="Kliknite pre výber dátumu"
-                                                      >
-                                                        <CalendarDays className="h-3 w-3 shrink-0 text-amber-300" />
-                                                        <span className="truncate">
-                                                          {reminderLogDateValue ? formatReminderDate(reminderLogDateValue) : ""}
-                                                        </span>
-                                                      </button>
-                                                      {openReminderCalendarLogId === log.id && (
-                                                        <ReminderDatePicker
-                                                          value={editingReminderDateValue}
-                                                          onChange={(dateValue) => {
-                                                            setEditingReminderDateValue(dateValue);
-                                                            handleSaveReminderLog(log.id, c.id, dateValue, activeReminderNoteText);
-                                                          }}
-                                                        />
-                                                      )}
+                                                        onChange={(e) => {
+                                                          setEditingLogText(e.target.value);
+                                                          if (editingReminderLogId !== log.id) {
+                                                            setEditingReminderLogId(log.id);
+                                                            setOpenReminderCalendarLogId(null);
+                                                            setEditingReminderDateValue(reminderLogDateValue || getTomorrowDateValue());
+                                                          }
+                                                        }}
+                                                        onKeyDown={(e) => {
+                                                          if (e.key === "Enter") handleSaveReminderLog(log.id, c.id, editingReminderDateValue, parseReminderNoteText(editingLogText));
+                                                          if (e.key === "Escape") setEditingReminderLogId(null);
+                                                        }}
+                                                        onBlur={() => {
+                                                          if (editingReminderLogId === log.id) handleSaveReminderLog(log.id, c.id, editingReminderDateValue, parseReminderNoteText(editingLogText));
+                                                        }}
+                                                        className="w-full bg-transparent border-0 px-1 py-0 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:text-amber-100"
+                                                      />
                                                     </div>
-                                                    <input
-                                                      type="text"
-                                                      value={editingReminderLogId === log.id ? editingLogText : reminderLogNoteText}
-                                                      placeholder="Poznámka..."
-                                                      onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        if (editingReminderLogId !== log.id) {
-                                                          openReminderLogNoteEditor(log.id, log.note || log.subject);
-                                                        }
-                                                      }}
-                                                      onChange={(e) => {
-                                                        setEditingLogText(e.target.value);
-                                                        if (editingReminderLogId !== log.id) {
-                                                          setEditingReminderLogId(log.id);
-                                                          setOpenReminderCalendarLogId(null);
-                                                          setEditingReminderDateValue(reminderLogDateValue || getTomorrowDateValue());
-                                                        }
-                                                      }}
-                                                      onKeyDown={(e) => {
-                                                        if (e.key === "Enter") handleSaveReminderLog(log.id, c.id, editingReminderDateValue, parseReminderNoteText(editingLogText));
-                                                        if (e.key === "Escape") setEditingReminderLogId(null);
-                                                      }}
-                                                      onBlur={() => {
-                                                        if (editingReminderLogId === log.id) handleSaveReminderLog(log.id, c.id, editingReminderDateValue, parseReminderNoteText(editingLogText));
-                                                      }}
-                                                      className="w-full bg-transparent border-0 px-1 py-0 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:text-amber-100"
-                                                    />
                                                   </div>
                                                 ) : editingLogId === log.id ? (
                                                   <input
@@ -3350,6 +3985,13 @@ export default function Dashboard() {
                                           title="Odmietol"
                                         >
                                           <span>❌</span> Odmietol
+                                        </button>
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); handleQuickCallLog(c.id, "warning"); }}
+                                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-yellow-500/90 hover:bg-yellow-400 text-slate-950 text-[10px] font-bold whitespace-nowrap transition cursor-pointer shadow-lg"
+                                          title="Pozor: nepríjemná komunikácia"
+                                        >
+                                          <span>⚠️</span> Pozor
                                         </button>
                                         <button
                                           onClick={(e) => { e.stopPropagation(); openReminderDatePicker(c.id); }}
